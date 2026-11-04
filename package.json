@@ -4,6 +4,9 @@
   "private": true,
   "description": "Online 4-player Ludo with 2v2 team pairing",
   "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
