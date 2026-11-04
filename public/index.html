@@ -5,12 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <meta name="theme-color" content="#0b1220" />
   <title>Ludo Teams — Play online 2v2</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div id="connBar" class="conn-bar hidden">Connection lost — reconnecting…</div>
+
   <div class="app">
     <section id="homeScreen" class="screen home">
       <header class="brand">
@@ -39,6 +42,7 @@
         <span class="vs">vs</span>
         <b class="t-green">Green</b> + <b class="t-blue">Blue</b>
       </p>
+      <p class="hint tiny">Roll a 6 to leave the yard · get all 4 tokens home to win for your team</p>
     </section>
 
     <section id="waitScreen" class="screen hidden">
@@ -48,7 +52,10 @@
             <div class="muted small-label">Room code</div>
             <div id="roomCode" class="code">----</div>
           </div>
-          <button id="copyBtn" class="btn ghost small">Copy</button>
+          <div class="head-actions">
+            <button id="copyBtn" class="btn ghost small">Copy</button>
+            <button id="leaveWaitBtn" class="btn ghost small">Leave</button>
+          </div>
         </div>
 
         <div id="seatList" class="seats"></div>
@@ -63,7 +70,10 @@
 
     <section id="gameScreen" class="screen game hidden">
       <div class="game-head">
-        <div class="pill" id="roomPill">----</div>
+        <div class="head-actions">
+          <div class="pill" id="roomPill">----</div>
+          <button id="leaveGameBtn" class="btn ghost small">Leave</button>
+        </div>
         <div class="team-bar" id="teamBar"></div>
       </div>
 
@@ -91,6 +101,7 @@
       <div class="spinner"></div>
       <h2>Finding players…</h2>
       <p id="queueCount" class="muted">1 / 4 players</p>
+      <button id="soloBtn" class="btn primary">Play vs bots instead</button>
       <button id="cancelQueueBtn" class="btn ghost">Cancel</button>
     </div>
   </div>

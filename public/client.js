@@ -47,6 +47,8 @@ const PALETTE = {
 const SIZE = 720;
 const CELL = SIZE / 15;
 const canvas = document.getElementById('board');
+canvas.width = SIZE;
+canvas.height = SIZE;
 const ctx = canvas.getContext('2d');
 
 const YARD_CENTER = YARD_BLOCK.map((b) => ({
@@ -82,6 +84,10 @@ const els = {
   queueOverlay: document.getElementById('queueOverlay'),
   queueCount: document.getElementById('queueCount'),
   cancelQueue: document.getElementById('cancelQueueBtn'),
+  solo: document.getElementById('soloBtn'),
+  connBar: document.getElementById('connBar'),
+  leaveWait: document.getElementById('leaveWaitBtn'),
+  leaveGame: document.getElementById('leaveGameBtn'),
   roomCode: document.getElementById('roomCode'),
   copy: document.getElementById('copyBtn'),
   seatList: document.getElementById('seatList'),
@@ -115,6 +121,9 @@ const myId = loadPlayerId();
 let room = null;
 let lastTokenPositions = [];
 let toastTimer = null;
+let lastGameId = null;
+let lastNoticeSeq = 0;
+let moveLock = false;
 
 function esc(value) {
   return String(value).replace(/[&<>"']/g, (ch) => ({
@@ -142,14 +151,52 @@ function me() {
 /* ---------------- Socket events ---------------- */
 
 socket.on('connect', () => {
+  els.connBar.classList.add('hidden');
   const code = localStorage.getItem(ROOM_KEY);
-  if (code) socket.emit('resume', { code, playerId: myId });
+  const name = localStorage.getItem(NAME_KEY) || '';
+  if (code) socket.emit('resume', { code, playerId: myId, name });
+});
+
+socket.on('disconnect', () => {
+  els.connBar.classList.remove('hidden');
+  if (!els.queueOverlay.classList.contains('hidden')) {
+    els.queueOverlay.classList.add('hidden');
+    toast('Matchmaking was interrupted — please try again');
+  }
+});
+
+socket.on('resumeFailed', () => {
+  localStorage.removeItem(ROOM_KEY);
+  room = null;
+  render();
+  toast('That game is no longer available');
+});
+
+socket.on('left', () => {
+  localStorage.removeItem(ROOM_KEY);
+  room = null;
+  lastGameId = null;
+  lastNoticeSeq = 0;
+  render();
+  toast('You left the game');
 });
 
 socket.on('state', (state) => {
   room = state;
+  moveLock = false;
   localStorage.setItem(ROOM_KEY, state.code);
   els.queueOverlay.classList.add('hidden');
+
+  if (state.game) {
+    if (state.game.gameId !== lastGameId) {
+      lastGameId = state.game.gameId;
+      lastNoticeSeq = state.game.noticeSeq;
+    } else if (state.game.noticeSeq > lastNoticeSeq) {
+      lastNoticeSeq = state.game.noticeSeq;
+      if (state.game.noticeText) toast(state.game.noticeText);
+    }
+  }
+
   render();
 });
 
@@ -191,6 +238,20 @@ els.cancelQueue.addEventListener('click', () => {
   socket.emit('cancelQueue');
   els.queueOverlay.classList.add('hidden');
 });
+
+els.solo.addEventListener('click', () => {
+  const name = desiredName();
+  if (!name) return;
+  els.queueOverlay.classList.add('hidden');
+  socket.emit('soloBots', { playerId: myId, name });
+});
+
+function leaveRoom() {
+  socket.emit('leave');
+}
+
+els.leaveWait.addEventListener('click', leaveRoom);
+els.leaveGame.addEventListener('click', leaveRoom);
 
 els.create.addEventListener('click', () => {
   const name = desiredName();
@@ -629,11 +690,11 @@ function drawBoard(game) {
   const movable = new Set(isMyTurn && game.phase === 'move' ? game.validMoves : []);
 
   ctx.clearRect(0, 0, SIZE, SIZE);
-  roundRectPath(0, 0, SIZE, SIZE, 26);
+  roundRectPath(0, 0, SIZE, SIZE, SIZE * 0.036);
   ctx.fillStyle = '#f6f8fc';
   ctx.fill();
   ctx.save();
-  roundRectPath(0, 0, SIZE, SIZE, 26);
+  roundRectPath(0, 0, SIZE, SIZE, SIZE * 0.036);
   ctx.clip();
 
   drawYards();
@@ -651,7 +712,8 @@ function drawBoard(game) {
 /* ---------------- Interaction ---------------- */
 
 els.diceBtn.addEventListener('click', () => {
-  if (!room || !room.game) return;
+  if (!room || !room.game || els.diceBtn.disabled) return;
+  els.diceBtn.disabled = true;
   socket.emit('roll');
 });
 
@@ -661,7 +723,7 @@ canvas.addEventListener('click', (event) => {
   const player = me();
   if (!player) return;
   if (game.winnerTeam !== null) return;
-  if (game.turn !== player.seat || game.phase !== 'move') return;
+  if (game.turn !== player.seat || game.phase !== 'move' || moveLock) return;
 
   const rect = canvas.getBoundingClientRect();
   const x = (event.clientX - rect.left) * (SIZE / rect.width);
@@ -677,7 +739,13 @@ canvas.addEventListener('click', (event) => {
       break;
     }
   }
-  if (hit) socket.emit('move', { token: hit.i });
+  if (hit) {
+    moveLock = true;
+    socket.emit('move', { token: hit.i });
+    setTimeout(() => {
+      moveLock = false;
+    }, 1500);
+  }
 });
 
 els.code.addEventListener('keydown', (event) => {

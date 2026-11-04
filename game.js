@@ -16,21 +16,31 @@ function ringIndex(seat, rel) {
 
 function newGame(names) {
   return {
+    gameId: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     names: names.slice(0, 4),
     tokens: [0, 1, 2, 3].map(() => [0, 1, 2, 3].map(() => ({ pos: YARD }))),
     turn: 0,
+    moveCount: 0,
     dice: null,
     phase: 'roll',
     validMoves: [],
     sixStreak: 0,
     winnerTeam: null,
     log: [],
+    noticeSeq: 0,
+    noticeText: '',
   };
 }
 
 function pushLog(game, text) {
   game.log.push(text);
   if (game.log.length > 40) game.log.shift();
+}
+
+function setNotice(game, text) {
+  game.noticeSeq += 1;
+  game.noticeText = text;
+  pushLog(game, text);
 }
 
 function getValidMoves(game, seat, die) {
@@ -52,13 +62,14 @@ function rollDice(game, seat, forcedDie) {
   if (game.winnerTeam !== null) return { error: 'Game is over' };
   if (game.phase !== 'roll' || game.turn !== seat) return { error: 'Not your turn to roll' };
 
+  game.moveCount += 1;
   const die = forcedDie || 1 + Math.floor(Math.random() * 6);
   game.dice = die;
   pushLog(game, `${game.names[seat]} rolled a ${die}`);
 
   const moves = getValidMoves(game, seat, die);
   if (moves.length === 0) {
-    pushLog(game, `No moves for ${game.names[seat]}`);
+    setNotice(game, `No moves for ${game.names[seat]} — turn passed`);
     game.validMoves = [];
     game.phase = 'roll';
     game.dice = null;
@@ -92,7 +103,7 @@ function finishTurn(game, seat, die, extra) {
   if (extra) {
     game.sixStreak += 1;
     if (game.sixStreak >= 3) {
-      pushLog(game, `Three sixes in a row - ${game.names[seat]} loses the turn`);
+      setNotice(game, `Three sixes in a row — ${game.names[seat]} loses the turn`);
       game.sixStreak = 0;
       game.phase = 'roll';
       game.dice = null;
@@ -117,6 +128,7 @@ function moveToken(game, seat, tokenIndex) {
   if (game.phase !== 'move' || game.turn !== seat) return { error: 'Not your turn to move' };
   if (!game.validMoves.includes(tokenIndex)) return { error: 'Invalid move' };
 
+  game.moveCount += 1;
   const die = game.dice;
   const token = game.tokens[seat][tokenIndex];
 
@@ -132,10 +144,10 @@ function moveToken(game, seat, tokenIndex) {
       const captured = captureOnRing(game, seat, abs);
       if (captured.length > 0) {
         const names = [...new Set(captured)].map((s) => game.names[s]).join(' & ');
-        pushLog(game, `${game.names[seat]} captured ${names}!`);
+        setNotice(game, `${game.names[seat]} captured ${names}!`);
       }
     } else if (target === GOAL) {
-      pushLog(game, `${game.names[seat]} sent a token home`);
+      setNotice(game, `${game.names[seat]} sent a token home!`);
     }
   }
 
@@ -146,7 +158,7 @@ function moveToken(game, seat, tokenIndex) {
     game.dice = null;
     game.validMoves = [];
     const teammates = game.names.filter((_, s) => TEAM_BY_SEAT[s] === game.winnerTeam);
-    pushLog(game, `${game.names[seat]} finished! ${teammates.join(' & ')} win!`);
+    setNotice(game, `${game.names[seat]} finished — ${teammates.join(' & ')} win!`);
     return { ok: true, won: true };
   }
 
@@ -156,8 +168,9 @@ function moveToken(game, seat, tokenIndex) {
 
 function skipTurn(game, reason) {
   if (game.winnerTeam !== null) return;
+  game.moveCount += 1;
   const name = game.names[game.turn];
-  pushLog(game, reason === 'offline' ? `${name} is offline - turn skipped` : `${name} skipped`);
+  setNotice(game, reason === 'offline' ? `${name} is offline — turn skipped` : `${name} skipped`);
   game.phase = 'roll';
   game.dice = null;
   game.validMoves = [];

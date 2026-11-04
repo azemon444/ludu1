@@ -303,6 +303,33 @@ input:focus {
   gap: 10px;
 }
 
+.conn-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 70;
+  text-align: center;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(90deg, #b3352f, #d9534f);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hint.tiny {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-top: 0;
+}
+
 .pill {
   font-size: 13px;
   font-weight: 700;

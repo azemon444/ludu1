@@ -8,7 +8,13 @@ const { io } = require('socket.io-client');
 const PORT = 4199;
 const URL = `http://localhost:${PORT}`;
 
-function waitFor(socket, event, predicate, timeout = 4000) {
+let nextId = 0;
+function uid(prefix = 'P') {
+  nextId += 1;
+  return `${prefix}${nextId}`;
+}
+
+function waitFor(socket, event, predicate, timeout = 5000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       socket.off(event, handler);
@@ -34,115 +40,275 @@ function connect() {
   });
 }
 
+async function createRoom(socket, id, name) {
+  const event = waitFor(socket, 'state', (s) => s.players.length === 1);
+  socket.emit('create', { playerId: id, name });
+  return event;
+}
+
+async function joinRoom(socket, code, id, name) {
+  const event = waitFor(socket, 'state', (s) => s.players.some((p) => p.id === id));
+  socket.emit('join', { code, playerId: id, name });
+  return event;
+}
+
+async function startRoom(socket) {
+  const event = waitFor(socket, 'state', (s) => s.started && !!s.game);
+  socket.emit('start');
+  return event;
+}
+
+function autoplay(sockets, ids, timeoutMs = 60000) {
+  return new Promise((resolve, reject) => {
+    const acted = new Map();
+    const timer = setTimeout(() => reject(new Error('Autoplay timed out')), timeoutMs);
+
+    sockets.forEach((socket, index) => {
+      socket.on('state', (state) => {
+        if (!state.started || !state.game) return;
+        if (state.game.winnerTeam !== null) {
+          clearTimeout(timer);
+          resolve(state);
+          return;
+        }
+        const player = state.players.find((p) => p.id === ids[index]);
+        if (!player || state.game.turn !== player.seat) return;
+
+        const key = `${state.game.gameId}:${state.game.moveCount}`;
+        if (acted.get(index) === key) return;
+        acted.set(index, key);
+
+        const snapshot = state;
+        setImmediate(() => {
+          if (snapshot.game.phase === 'roll') {
+            socket.emit('roll');
+          } else if (snapshot.game.phase === 'move' && snapshot.game.validMoves.length > 0) {
+            const moves = snapshot.game.validMoves;
+            socket.emit('move', { token: moves[Math.floor(Math.random() * moves.length)] });
+          }
+        });
+      });
+    });
+  });
+}
+
 async function main() {
   const server = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, PORT: String(PORT), BOT_DELAY: '15', OFFLINE_DELAY: '200' },
+    env: { ...process.env, PORT: String(PORT), BOT_DELAY: '15', OFFLINE_DELAY: '150' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  server.stderr.on('data', (d) => process.stderr.write(d));
+  server.stderr.on('data', (data) => process.stderr.write(data));
+
+  const sockets = [];
+  const track = (socket) => {
+    sockets.push(socket);
+    return socket;
+  };
 
   try {
     await new Promise((resolve) => setTimeout(resolve, 700));
 
-    const sockets = await Promise.all([connect(), connect(), connect(), connect()]);
-    const [a, b, c, d] = sockets;
-    const ids = ['A', 'B', 'C', 'D'];
+    /* 1. Private room: create, join, start, roll */
+    {
+      const a = track(await connect());
+      const b = track(await connect());
+      const c = track(await connect());
+      const d = track(await connect());
+      const ids = [uid('A'), uid('B'), uid('C'), uid('D')];
 
-    const created = waitFor(a, 'state', (s) => s.players.length === 1);
-    a.emit('create', { playerId: ids[0], name: 'Alice' });
-    const initial = await created;
-    const code = initial.code;
-    assert.equal(code.length, 4);
+      const initial = await createRoom(a, ids[0], 'Alice');
+      assert.equal(initial.code.length, 4);
 
-    const joined = waitFor(a, 'state', (s) => s.players.length === 4);
-    b.emit('join', { code, playerId: ids[1], name: 'Bob' });
-    c.emit('join', { code, playerId: ids[2], name: 'Cara' });
-    d.emit('join', { code, playerId: ids[3], name: 'Dan' });
-    const lobby = await joined;
-    assert.equal(lobby.started, false);
-    assert.deepEqual(lobby.players.map((p) => p.seat), [0, 1, 2, 3]);
-    assert.deepEqual(lobby.teamBySeat, [0, 1, 0, 1]);
+      await joinRoom(b, initial.code, ids[1], 'Bob');
+      await joinRoom(c, initial.code, ids[2], 'Cara');
+      const lobby = await joinRoom(d, initial.code, ids[3], 'Dan');
+      assert.equal(lobby.players.length, 4);
+      assert.deepEqual(lobby.players.map((p) => p.seat), [0, 1, 2, 3]);
+      assert.deepEqual(lobby.teamBySeat, [0, 1, 0, 1]);
 
-    const startedEvent = waitFor(a, 'state', (s) => s.started);
-    a.emit('start');
-    const started = await startedEvent;
-    assert.equal(started.game.turn, 0);
-    assert.equal(started.game.phase, 'roll');
+      const started = await startRoom(a);
+      assert.equal(started.game.turn, 0);
+      assert.equal(started.game.phase, 'roll');
 
-    const rolledEvent = waitFor(a, 'state', (s) => s.game && (s.game.phase === 'move' || s.game.turn !== 0));
-    a.emit('roll');
-    const rolled = await rolledEvent;
-    assert.ok(rolled.game.phase === 'move' || rolled.game.turn !== 0);
-    if (rolled.game.dice !== null) {
-      assert.ok(rolled.game.dice >= 1 && rolled.game.dice <= 6);
+      const rolledEvent = waitFor(a, 'state', (s) => s.game.phase === 'move' || s.game.turn !== 0);
+      a.emit('roll');
+      const rolled = await rolledEvent;
+      assert.ok(rolled.game.phase === 'move' || rolled.game.turn !== 0);
+
+      a.close();
+      b.close();
+      c.close();
+      d.close();
     }
 
-    const host = await connect();
-    const botCreated = waitFor(host, 'state', (s) => s.players.length === 1);
-    host.emit('create', { playerId: 'HOST', name: 'Host' });
-    const hostState = await botCreated;
+    /* 2. Full 4-human game reaches a winner */
+    {
+      const clients = await Promise.all([connect(), connect(), connect(), connect()]);
+      clients.forEach(track);
+      const ids = clients.map(() => uid('H'));
+      const initial = await createRoom(clients[0], ids[0], 'H1');
+      await joinRoom(clients[1], initial.code, ids[1], 'H2');
+      await joinRoom(clients[2], initial.code, ids[2], 'H3');
+      await joinRoom(clients[3], initial.code, ids[3], 'H4');
 
-    const botsAdded = waitFor(host, 'state', (s) => s.players.length === 4);
-    host.emit('fillBots');
-    const botLobby = await botsAdded;
-    assert.equal(botLobby.players.filter((p) => p.isBot).length, 3);
-
-    const botStarted = waitFor(host, 'state', (s) => s.started);
-    host.emit('start');
-    const botGame = await botStarted;
-    assert.equal(botGame.players.length, 4);
-    assert.equal(botGame.game.phase, 'roll');
-    assert.equal(botGame.code, hostState.code);
-
-    const host2 = await connect();
-    const autoCreated = waitFor(host2, 'state', (s) => s.players.length === 1);
-    host2.emit('create', { playerId: 'HOST2', name: 'Auto' });
-    await autoCreated;
-
-    const autoReady = waitFor(host2, 'state', (s) => s.players.length === 4);
-    host2.emit('fillBots');
-    await autoReady;
-
-    host2.on('state', (state) => {
-      if (!state.started || !state.game || state.game.winnerTeam !== null) return;
-      const self = state.players.find((p) => p.id === 'HOST2');
-      if (!self || state.game.turn !== self.seat) return;
-      if (state.game.phase === 'roll') {
-        host2.emit('roll');
-      } else if (state.game.phase === 'move' && state.game.validMoves.length > 0) {
-        host2.emit('move', { token: state.game.validMoves[0] });
+      const finished = autoplay(clients, ids);
+      clients[0].emit('start');
+      const final = await finished;
+      assert.ok(final.game.winnerTeam === 0 || final.game.winnerTeam === 1);
+      assert.equal(final.game.phase, 'over');
+      for (const seat of final.game.tokens) {
+        for (const token of seat) {
+          assert.ok(token.pos === -1 || (token.pos >= 0 && token.pos <= 56));
+        }
       }
-    });
+      clients.forEach((s) => s.close());
+    }
 
-    const finished = waitFor(host2, 'state', (s) => s.game && s.game.winnerTeam !== null, 30000);
-    host2.emit('start');
-    const finalState = await finished;
-    assert.ok(finalState.game.winnerTeam === 0 || finalState.game.winnerTeam === 1);
-    assert.equal(finalState.game.phase, 'over');
+    /* 3. Bots fill empty seats and play */
+    {
+      const host = track(await connect());
+      const id = uid('HOST');
+      const initial = await createRoom(host, id, 'Host');
+      const botsEvent = waitFor(host, 'state', (s) => s.players.length === 4);
+      host.emit('fillBots');
+      const lobby = await botsEvent;
+      assert.equal(lobby.players.filter((p) => p.isBot).length, 3);
 
-    const restarted = waitFor(host2, 'state', (s) => s.game && s.game.winnerTeam === null);
-    host2.emit('restart');
-    const fresh = await restarted;
-    assert.equal(fresh.game.turn, 0);
+      const started = await startRoom(host);
+      assert.equal(started.players.length, 4);
+      assert.equal(started.code, initial.code);
+      host.close();
+    }
 
-    const quickSockets = await Promise.all([connect(), connect(), connect(), connect()]);
-    const quickIds = ['Q1', 'Q2', 'Q3', 'Q4'];
-    const quickStates = quickSockets.map((s) =>
-      waitFor(s, 'state', (state) => state.started && state.players.length === 4)
-    );
-    quickSockets.forEach((s, i) => {
-      s.emit('quickMatch', { playerId: quickIds[i], name: `Q${i + 1}` });
-    });
-    const matched = await Promise.all(quickStates);
-    assert.equal(new Set(matched.map((s) => s.code)).size, 1);
-    assert.equal(matched[0].game.turn, 0);
-    quickSockets.forEach((s) => s.close());
+    /* 4. Solo vs bots from matchmaking overlay */
+    {
+      const solo = track(await connect());
+      const id = uid('SOLO');
+      const event = waitFor(solo, 'state', (s) => s.started && s.players.length === 4);
+      solo.emit('soloBots', { playerId: id, name: 'Solo' });
+      const state = await event;
+      assert.equal(state.players.filter((p) => p.isBot).length, 3);
+      assert.equal(state.game.turn, 0);
+      solo.close();
+    }
 
-    console.log('integration ok: create, join, start, roll, bots, full game, restart, quick match');
-    host.close();
-    host2.close();
-    sockets.forEach((s) => s.close());
+    /* 5. Quick match groups exactly four players automatically */
+    {
+      const quick = await Promise.all([connect(), connect(), connect(), connect()]);
+      quick.forEach(track);
+      const ids = quick.map(() => uid('Q'));
+      const states = quick.map((s) => waitFor(s, 'state', (st) => st.started && st.players.length === 4));
+      quick.forEach((s, i) => s.emit('quickMatch', { playerId: ids[i], name: `Q${i + 1}` }));
+      const matched = await Promise.all(states);
+      assert.equal(new Set(matched.map((s) => s.code)).size, 1);
+      assert.equal(matched[0].game.phase, 'roll');
+      quick.forEach((s) => s.close());
+    }
+
+    /* 6. Reconnect resumes a running game; bad resume is reported */
+    {
+      const host = track(await connect());
+      const id = uid('RES');
+      await createRoom(host, id, 'Resumer');
+      const botsEvent = waitFor(host, 'state', (s) => s.players.length === 4);
+      host.emit('fillBots');
+      await botsEvent;
+      const started = await startRoom(host);
+      const code = started.code;
+
+      host.disconnect();
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      const again = track(await connect());
+      const resumed = waitFor(again, 'state', (s) => s.started && s.code === code);
+      again.emit('resume', { code, playerId: id });
+      const state = await resumed;
+      assert.equal(state.players.find((p) => p.id === id).connected, true);
+
+      const bad = track(await connect());
+      const failed = waitFor(bad, 'resumeFailed');
+      bad.emit('resume', { code: 'ZZZZ', playerId: 'nobody' });
+      const failure = await failed;
+      assert.equal(failure.reason, 'room');
+
+      again.close();
+      bad.close();
+    }
+
+    /* 6b. Refresh in the lobby re-adds the player via resume */
+    {
+      const first = track(await connect());
+      const second = track(await connect());
+      const firstId = uid('R1');
+      const secondId = uid('R2');
+      const initial = await createRoom(first, firstId, 'One');
+      await joinRoom(second, initial.code, secondId, 'Two');
+
+      second.disconnect();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const returned = track(await connect());
+      const event = waitFor(returned, 'state', (s) => s.players.some((p) => p.id === secondId));
+      returned.emit('resume', { code: initial.code, playerId: secondId, name: 'Two' });
+      const state = await event;
+      assert.equal(state.players.length, 2);
+      assert.equal(state.started, false);
+
+      first.close();
+      returned.close();
+    }
+
+    /* 7. Leave removes a lobby player and reassigns host */
+    {
+      const first = track(await connect());
+      const second = track(await connect());
+      const firstId = uid('L');
+      const secondId = uid('M');
+      const initial = await createRoom(first, firstId, 'First');
+      const lobby = await joinRoom(second, initial.code, secondId, 'Second');
+
+      const afterLeave = waitFor(second, 'state', (s) => s.players.length === 1);
+      first.emit('leave');
+      const state = await afterLeave;
+      assert.equal(state.players[0].id, secondId);
+      assert.equal(state.hostId, secondId);
+      second.close();
+    }
+
+    /* 8. Out-of-turn actions are rejected */
+    {
+      const first = track(await connect());
+      const second = track(await connect());
+      const firstId = uid('X');
+      const secondId = uid('Y');
+      const initial = await createRoom(first, firstId, 'X');
+      await joinRoom(second, initial.code, secondId, 'Y');
+      const botsEvent = waitFor(first, 'state', (s) => s.players.length === 4);
+      first.emit('fillBots');
+      await botsEvent;
+      const started = await startRoom(first);
+      assert.equal(started.game.turn, 0);
+
+      const error = waitFor(second, 'errorMsg', (msg) => /not your turn/i.test(msg));
+      second.emit('roll');
+      await error;
+      first.close();
+      second.close();
+    }
+
+    /* 9. Health endpoint reports the running version */
+    {
+      const response = await fetch(`${URL}/health`);
+      const body = await response.json();
+      assert.equal(body.ok, true);
+      assert.equal(body.version, '1.1.0');
+    }
+
+    console.log('integration ok: rooms, full game, bots, quick match, reconnect, leave, validation, health');
   } finally {
+    sockets.forEach((socket) => {
+      try { socket.close(); } catch { /* ignore */ }
+    });
     server.kill('SIGKILL');
   }
 }

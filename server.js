@@ -6,15 +6,26 @@ const path = require('path');
 const { Server } = require('socket.io');
 const gameLogic = require('./game');
 
+const APP_VERSION = '1.1.0';
+const rooms = new Map();
+const quickQueue = [];
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    version: APP_VERSION,
+    rooms: rooms.size,
+    queue: quickQueue.length,
+    uptime: Math.round(process.uptime()),
+  });
+});
 
-const rooms = new Map();
-const quickQueue = [];
-const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+app.use(express.static(path.join(__dirname, 'public')));
 
 function makeCode() {
   let code;
@@ -30,7 +41,7 @@ function cleanName(name) {
 
 function createRoom(hostId) {
   const code = makeCode();
-  const room = { code, hostId, started: false, players: [], game: null, timer: null };
+  const room = { code, hostId, started: false, players: [], game: null, timer: null, createdAt: Date.now() };
   rooms.set(code, room);
   return room;
 }
@@ -53,6 +64,29 @@ function addPlayer(room, playerId, name, isBot = false) {
   return player;
 }
 
+function transferHost(room) {
+  const current = room.players.find((p) => p.id === room.hostId);
+  if (current && current.connected !== false && !current.isBot) return;
+  const next = room.players.find((p) => p.connected !== false && !p.isBot);
+  if (next) room.hostId = next.id;
+}
+
+function removeLobbyPlayer(room, player) {
+  room.players = room.players.filter((p) => p.id !== player.id);
+  if (room.hostId === player.id) {
+    const next = room.players.find((p) => !p.isBot);
+    room.hostId = next ? next.id : room.players[0]?.id || null;
+  }
+  if (room.players.length === 0) {
+    removeRoom(room);
+    return false;
+  }
+  room.players.forEach((p, index) => {
+    p.seat = index;
+  });
+  return true;
+}
+
 function clearRoomTimer(room) {
   if (room.timer) {
     clearTimeout(room.timer);
@@ -68,18 +102,22 @@ function removeRoom(room) {
 function publicState(room) {
   const game = room.game
     ? {
+        gameId: room.game.gameId,
         tokens: room.game.tokens,
-        names: room.game.names,
         turn: room.game.turn,
+        moveCount: room.game.moveCount,
         dice: room.game.dice,
         phase: room.game.phase,
         validMoves: room.game.validMoves,
         winnerTeam: room.game.winnerTeam,
+        noticeSeq: room.game.noticeSeq,
+        noticeText: room.game.noticeText,
         log: room.game.log,
       }
     : null;
 
   return {
+    version: APP_VERSION,
     code: room.code,
     hostId: room.hostId,
     started: room.started,
@@ -261,11 +299,19 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
-  socket.on('resume', ({ code, playerId } = {}) => {
+  socket.on('resume', ({ code, playerId, name } = {}) => {
     const room = rooms.get(String(code || '').toUpperCase().trim());
-    if (!room) return;
-    const player = room.players.find((p) => p.id === playerId);
-    if (!player) return;
+    if (!room) return socket.emit('resumeFailed', { reason: 'room' });
+
+    let player = room.players.find((p) => p.id === playerId);
+    if (!player) {
+      if (room.started || room.players.length >= 4) {
+        return socket.emit('resumeFailed', { reason: 'player' });
+      }
+      player = addPlayer(room, playerId, name);
+      if (!player) return socket.emit('resumeFailed', { reason: 'player' });
+    }
+
     player.connected = true;
     bindSocket(socket, room, playerId);
     broadcast(room);
@@ -290,6 +336,25 @@ io.on('connection', (socket) => {
     socket.data.queued = false;
     socket.emit('queued', { inQueue: false, count: quickQueue.length, needed: 4 });
     notifyQueue();
+  });
+
+  socket.on('soloBots', ({ playerId, name } = {}) => {
+    removeQueuedSocket(socket.id);
+    socket.data.queued = false;
+    notifyQueue();
+    if (socket.data.code && rooms.has(socket.data.code)) {
+      return socket.emit('errorMsg', 'You are already in a room');
+    }
+    const id = String(playerId || '').slice(0, 64) || `p_${socket.id}`;
+    const room = createRoom(id);
+    addPlayer(room, id, name);
+    for (let i = 1; i <= 3; i++) {
+      addPlayer(room, `bot_${Math.random().toString(36).slice(2, 10)}`, `Bot ${i}`, true);
+    }
+    bindSocket(socket, room, id);
+    room.started = true;
+    room.game = gameLogic.newGame(room.players.map((p) => p.name));
+    broadcast(room);
   });
 
   socket.on('start', () => {
@@ -344,6 +409,26 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
+  socket.on('leave', () => {
+    const room = rooms.get(socket.data.code);
+    if (room) {
+      const player = room.players.find((p) => p.id === socket.data.playerId);
+      if (player) {
+        if (!room.started && !player.isBot) {
+          if (removeLobbyPlayer(room, player)) broadcast(room);
+        } else {
+          player.connected = false;
+          transferHost(room);
+          broadcast(room);
+        }
+        socket.leave(room.code);
+      }
+    }
+    socket.data.code = null;
+    socket.data.playerId = null;
+    socket.emit('left');
+  });
+
   socket.on('restart', () => {
     const { room, player } = context(socket);
     if (!room || !player || !room.game) return;
@@ -361,25 +446,27 @@ io.on('connection', (socket) => {
     if (!player) return;
 
     if (!room.started && !player.isBot) {
-      room.players = room.players.filter((p) => p.id !== player.id);
-      if (room.hostId === player.id) {
-        const nextHost = room.players.find((p) => !p.isBot);
-        room.hostId = nextHost ? nextHost.id : room.players[0]?.id || null;
-      }
-      if (room.players.length === 0) {
-        removeRoom(room);
-        return;
-      }
-      room.players.forEach((p, index) => {
-        p.seat = index;
-      });
+      if (removeLobbyPlayer(room, player)) broadcast(room);
     } else {
       player.connected = false;
+      transferHost(room);
+      broadcast(room);
     }
-
-    broadcast(room);
   });
 });
+
+setInterval(() => {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    const hasConnectedHuman = room.players.some((p) => !p.isBot && p.connected !== false);
+    const age = now - room.createdAt;
+    if (!room.started && age > 3 * 60 * 60 * 1000) {
+      removeRoom(room);
+    } else if (room.started && !hasConnectedHuman && age > 6 * 60 * 60 * 1000) {
+      removeRoom(room);
+    }
+  }
+}, 10 * 60 * 1000).unref();
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
