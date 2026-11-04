@@ -6,7 +6,7 @@ const path = require('path');
 const { Server } = require('socket.io');
 const gameLogic = require('./game');
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const rooms = new Map();
 const quickQueue = [];
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

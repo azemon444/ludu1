@@ -301,7 +301,7 @@ async function main() {
       const response = await fetch(`${URL}/health`);
       const body = await response.json();
       assert.equal(body.ok, true);
-      assert.equal(body.version, '1.1.0');
+      assert.equal(body.version, require('../package.json').version);
     }
 
     console.log('integration ok: rooms, full game, bots, quick match, reconnect, leave, validation, health');

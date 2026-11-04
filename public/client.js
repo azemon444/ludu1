@@ -97,6 +97,7 @@ const els = {
   roomPill: document.getElementById('roomPill'),
   teamBar: document.getElementById('teamBar'),
   turnInfo: document.getElementById('turnInfo'),
+  moveHint: document.getElementById('moveHint'),
   diceBtn: document.getElementById('diceBtn'),
   diceVal: document.getElementById('diceVal'),
   log: document.getElementById('log'),
@@ -124,6 +125,10 @@ let toastTimer = null;
 let lastGameId = null;
 let lastNoticeSeq = 0;
 let moveLock = false;
+let autoMoveKey = null;
+let autoMoveTimer = null;
+let pulseOn = false;
+let pulseTimer = null;
 
 function esc(value) {
   return String(value).replace(/[&<>"']/g, (ch) => ({
@@ -372,12 +377,68 @@ function renderWait() {
   }
 }
 
+function autoTokenChoice(game, seat) {
+  const moves = game.validMoves || [];
+  if (!moves.length) return null;
+  if (moves.length === 1) return moves[0];
+  const tokens = game.tokens[seat];
+  if (moves.every((i) => tokens[i].pos === -1)) return moves[0];
+  return null;
+}
+
+function maybeAutoMove(game, seat) {
+  const pick = autoTokenChoice(game, seat);
+  if (pick === null) return;
+  const key = `${game.gameId}:${game.moveCount}`;
+  if (autoMoveKey === key) return;
+  autoMoveKey = key;
+  clearTimeout(autoMoveTimer);
+  autoMoveTimer = setTimeout(() => {
+    const current = room && room.game;
+    if (!current || current.gameId !== game.gameId || current.moveCount !== game.moveCount) return;
+    if (current.phase !== 'move' || current.turn !== seat) return;
+    if (!current.validMoves.includes(pick)) return;
+    moveLock = true;
+    socket.emit('move', { token: pick });
+    setTimeout(() => { moveLock = false; }, 1500);
+  }, 550);
+}
+
+function updatePulse(game, needed) {
+  if (!needed) {
+    if (pulseTimer) {
+      clearInterval(pulseTimer);
+      pulseTimer = null;
+      pulseOn = false;
+    }
+    return;
+  }
+  if (pulseTimer) return;
+  pulseTimer = setInterval(() => {
+    const current = room && room.game;
+    const player = me();
+    if (!current || !player) return;
+    if (current.winnerTeam !== null || current.turn !== player.seat || current.phase !== 'move') {
+      clearInterval(pulseTimer);
+      pulseTimer = null;
+      pulseOn = false;
+      drawBoard(current);
+      return;
+    }
+    pulseOn = !pulseOn;
+    drawBoard(current);
+  }, 420);
+}
+
 function renderGame() {
   const game = room.game;
   const player = me();
   const mySeat = player ? player.seat : -1;
   const isOver = game.winnerTeam !== null;
   const isMyTurn = !isOver && game.turn === mySeat;
+  const canMove = isMyTurn && game.phase === 'move';
+  const autoPick = canMove ? autoTokenChoice(game, mySeat) : null;
+  const manualPick = canMove && autoPick === null;
   const current = room.players.find((p) => p.seat === game.turn);
 
   els.roomPill.textContent = room.code;
@@ -399,8 +460,10 @@ function renderGame() {
   } else if (current) {
     const swatch = `<span class="sw" style="background:${PALETTE[COLORS[game.turn]].main}"></span>`;
     let suffix = '';
-    if (isMyTurn) suffix = game.phase === 'move' ? ' — pick a token' : ' — your turn';
-    else if (current.isBot) suffix = ' is thinking…';
+    if (isMyTurn) {
+      if (game.phase === 'move') suffix = manualPick ? ' — tap a glowing token' : ' — moving…';
+      else suffix = ' — your turn';
+    } else if (current.isBot) suffix = ' is thinking…';
     else if (!current.connected) suffix = ' is offline…';
     els.turnInfo.innerHTML = `<span class="who">${swatch}${esc(current.name)}${suffix}</span>`;
   } else {
@@ -411,6 +474,14 @@ function renderGame() {
   els.diceBtn.disabled = !canRoll;
   els.diceBtn.classList.toggle('pulse', canRoll);
   els.diceVal.textContent = game.dice ? String(game.dice) : '🎲';
+
+  const showHint = canMove && !isOver;
+  els.moveHint.classList.toggle('hidden', !showHint);
+  els.moveHint.classList.toggle('auto', showHint && !manualPick);
+  els.moveHint.textContent = manualPick ? 'Tap a glowing token' : 'Moving…';
+
+  if (canMove) maybeAutoMove(game, mySeat);
+  updatePulse(game, canMove);
 
   els.log.innerHTML = game.log.slice(-3).map((line) => esc(line)).join('<br>');
   els.log.scrollTop = els.log.scrollHeight;
@@ -644,11 +715,15 @@ function drawTokens(positions, game, movable, turnSeat) {
     if (dim) ctx.globalAlpha = 0.55;
 
     if (isMovable) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(255, 213, 74, 0.95)';
+      ctx.shadowBlur = pulseOn ? 18 : 7;
       ctx.beginPath();
-      ctx.arc(token.x, token.y, token.r + 5, 0, Math.PI * 2);
+      ctx.arc(token.x, token.y, token.r + (pulseOn ? 9 : 5), 0, Math.PI * 2);
       ctx.strokeStyle = '#ffd54a';
-      ctx.lineWidth = 3.5;
+      ctx.lineWidth = pulseOn ? 5 : 3.5;
       ctx.stroke();
+      ctx.restore();
     }
 
     ctx.beginPath();
