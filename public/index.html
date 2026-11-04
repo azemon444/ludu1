@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#0b1220" />
+  <title>Ludo Teams — Play online 2v2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <section id="homeScreen" class="screen home">
+      <header class="brand">
+        <div class="logo">🎲</div>
+        <h1>Ludo <span>Teams</span></h1>
+        <p>4 players · 2 teams · play online</p>
+      </header>
+
+      <div class="card">
+        <label for="nameInput">Your name</label>
+        <input id="nameInput" maxlength="16" autocomplete="off" placeholder="Enter your name" />
+
+        <button id="quickBtn" class="btn primary">Quick match <span class="btn-sub">4 players</span></button>
+        <button id="createBtn" class="btn">Create a private room</button>
+
+        <div class="divider"><span>or join with a code</span></div>
+
+        <div class="join-row">
+          <input id="codeInput" maxlength="4" inputmode="text" autocomplete="off" placeholder="CODE" />
+          <button id="joinBtn" class="btn">Join</button>
+        </div>
+      </div>
+
+      <p class="hint">
+        Pairs: <b class="t-red">Red</b> + <b class="t-yellow">Yellow</b>
+        <span class="vs">vs</span>
+        <b class="t-green">Green</b> + <b class="t-blue">Blue</b>
+      </p>
+    </section>
+
+    <section id="waitScreen" class="screen hidden">
+      <div class="card wide">
+        <div class="row-between">
+          <div>
+            <div class="muted small-label">Room code</div>
+            <div id="roomCode" class="code">----</div>
+          </div>
+          <button id="copyBtn" class="btn ghost small">Copy</button>
+        </div>
+
+        <div id="seatList" class="seats"></div>
+
+        <div class="actions">
+          <button id="fillBotsBtn" class="btn ghost">Fill with bots</button>
+          <button id="startBtn" class="btn primary" disabled>Start game</button>
+        </div>
+        <div id="waitMsg" class="muted center"></div>
+      </div>
+    </section>
+
+    <section id="gameScreen" class="screen game hidden">
+      <div class="game-head">
+        <div class="pill" id="roomPill">----</div>
+        <div class="team-bar" id="teamBar"></div>
+      </div>
+
+      <div class="board-wrap">
+        <canvas id="board" width="720" height="720"></canvas>
+        <div id="banner" class="banner hidden">
+          <div id="bannerTitle" class="banner-title"></div>
+          <div id="bannerText" class="banner-text"></div>
+          <button id="restartBtn" class="btn primary hidden">Play again</button>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="turn-info" id="turnInfo">Waiting…</div>
+        <button id="diceBtn" class="dice" disabled>
+          <span id="diceVal">🎲</span>
+        </button>
+        <div class="log" id="log"></div>
+      </div>
+    </section>
+  </div>
+
+  <div id="queueOverlay" class="queue-overlay hidden">
+    <div class="queue-card">
+      <div class="spinner"></div>
+      <h2>Finding players…</h2>
+      <p id="queueCount" class="muted">1 / 4 players</p>
+      <button id="cancelQueueBtn" class="btn ghost">Cancel</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>
