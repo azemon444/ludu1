@@ -6,9 +6,9 @@ const path = require('path');
 const { Server } = require('socket.io');
 const gameLogic = require('./game');
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const rooms = new Map();
-const quickQueue = [];
+const quickQueues = { 2: [], 3: [], 4: [] };
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 const app = express();
@@ -20,7 +20,7 @@ app.get('/health', (req, res) => {
     ok: true,
     version: APP_VERSION,
     rooms: rooms.size,
-    queue: quickQueue.length,
+    queue: Object.values(quickQueues).reduce((total, queue) => total + queue.length, 0),
     uptime: Math.round(process.uptime()),
   });
 });
@@ -39,9 +39,18 @@ function cleanName(name) {
   return String(name || '').trim().slice(0, 16) || 'Player';
 }
 
-function createRoom(hostId) {
+function createRoom(hostId, size = 4) {
   const code = makeCode();
-  const room = { code, hostId, started: false, players: [], game: null, timer: null, createdAt: Date.now() };
+  const room = {
+    code,
+    hostId,
+    size: gameLogic.normalizeSize(size),
+    started: false,
+    players: [],
+    game: null,
+    timer: null,
+    createdAt: Date.now(),
+  };
   rooms.set(code, room);
   return room;
 }
@@ -52,16 +61,31 @@ function addPlayer(room, playerId, name, isBot = false) {
     existing.connected = true;
     return existing;
   }
-  if (room.started || room.players.length >= 4) return null;
+  if (room.started || room.players.length >= room.size) return null;
   const player = {
     id: playerId,
     name: cleanName(name),
-    seat: room.players.length,
+    seat: gameLogic.seatsForSize(room.size)[room.players.length],
     isBot,
     connected: true,
   };
   room.players.push(player);
   return player;
+}
+
+function reindexSeats(room) {
+  const seats = gameLogic.seatsForSize(room.size);
+  room.players.forEach((player, index) => {
+    player.seat = seats[index];
+  });
+}
+
+function createGameForRoom(room) {
+  const seats = gameLogic.seatsForSize(room.size);
+  const teamBySeat = gameLogic.teamsForSize(room.size, seats);
+  const names = ['', '', '', ''];
+  for (const player of room.players) names[player.seat] = player.name;
+  return gameLogic.newGame(names, { size: room.size, activeSeats: seats, teamBySeat });
 }
 
 function transferHost(room) {
@@ -81,9 +105,7 @@ function removeLobbyPlayer(room, player) {
     removeRoom(room);
     return false;
   }
-  room.players.forEach((p, index) => {
-    p.seat = index;
-  });
+  reindexSeats(room);
   return true;
 }
 
@@ -100,9 +122,14 @@ function removeRoom(room) {
 }
 
 function publicState(room) {
+  const activeSeats = gameLogic.seatsForSize(room.size);
+  const teamBySeat = gameLogic.teamsForSize(room.size, activeSeats);
   const game = room.game
     ? {
         gameId: room.game.gameId,
+        size: room.game.size,
+        activeSeats: room.game.activeSeats,
+        teamBySeat: room.game.teamBySeat,
         tokens: room.game.tokens,
         turn: room.game.turn,
         moveCount: room.game.moveCount,
@@ -110,6 +137,7 @@ function publicState(room) {
         phase: room.game.phase,
         validMoves: room.game.validMoves,
         winnerTeam: room.game.winnerTeam,
+        winnerSeat: room.game.winnerSeat,
         noticeSeq: room.game.noticeSeq,
         noticeText: room.game.noticeText,
         log: room.game.log,
@@ -120,6 +148,8 @@ function publicState(room) {
     version: APP_VERSION,
     code: room.code,
     hostId: room.hostId,
+    size: room.size,
+    activeSeats,
     started: room.started,
     players: room.players.map((p) => ({
       id: p.id,
@@ -129,7 +159,7 @@ function publicState(room) {
       connected: p.connected !== false,
     })),
     game,
-    teamBySeat: gameLogic.TEAM_BY_SEAT,
+    teamBySeat,
   };
 }
 
@@ -149,8 +179,8 @@ function chooseBotMove(game, seat, moves) {
       if (target === gameLogic.GOAL) score = 2000;
       if (target <= 50 && !gameLogic.SAFE_RING.has(gameLogic.ringIndex(seat, target))) {
         const abs = gameLogic.ringIndex(seat, target);
-        for (let s = 0; s < 4; s++) {
-          if (s === seat || gameLogic.TEAM_BY_SEAT[s] === gameLogic.TEAM_BY_SEAT[seat]) continue;
+        for (const s of game.activeSeats) {
+          if (s === seat || gameLogic.teamOf(game, s) === gameLogic.teamOf(game, seat)) continue;
           for (const other of game.tokens[s]) {
             if (other.pos >= 0 && other.pos <= 50 && gameLogic.ringIndex(s, other.pos) === abs) {
               score += 600;
@@ -225,29 +255,42 @@ function bindSocket(socket, room, playerId) {
 }
 
 function removeQueuedSocket(socketId) {
-  const index = quickQueue.findIndex((entry) => entry.socketId === socketId);
-  if (index >= 0) quickQueue.splice(index, 1);
-  return index >= 0;
+  let removed = false;
+  for (const queue of Object.values(quickQueues)) {
+    for (let i = queue.length - 1; i >= 0; i--) {
+      if (queue[i].socketId === socketId) {
+        queue.splice(i, 1);
+        removed = true;
+      }
+    }
+  }
+  return removed;
 }
 
 function notifyQueue() {
-  for (const entry of quickQueue) {
-    io.to(entry.socketId).emit('queued', {
-      inQueue: true,
-      count: quickQueue.length,
-      needed: 4,
-    });
+  for (const [size, queue] of Object.entries(quickQueues)) {
+    for (const entry of queue) {
+      io.to(entry.socketId).emit('queued', {
+        inQueue: true,
+        count: queue.length,
+        needed: Number(size),
+        size: Number(size),
+      });
+    }
   }
 }
 
-function maybeQuickMatch() {
-  for (let i = quickQueue.length - 1; i >= 0; i--) {
-    if (!io.sockets.sockets.get(quickQueue[i].socketId)) quickQueue.splice(i, 1);
+function maybeQuickMatch(size) {
+  const queue = quickQueues[size];
+  if (!queue) return;
+
+  for (let i = queue.length - 1; i >= 0; i--) {
+    if (!io.sockets.sockets.get(queue[i].socketId)) queue.splice(i, 1);
   }
 
-  while (quickQueue.length >= 4) {
-    const group = quickQueue.splice(0, 4);
-    const room = createRoom(group[0].playerId);
+  while (queue.length >= size) {
+    const group = queue.splice(0, size);
+    const room = createRoom(group[0].playerId, size);
     for (const entry of group) {
       addPlayer(room, entry.playerId, entry.name);
       const socket = io.sockets.sockets.get(entry.socketId);
@@ -257,7 +300,7 @@ function maybeQuickMatch() {
       }
     }
     room.started = true;
-    room.game = gameLogic.newGame(room.players.map((p) => p.name));
+    room.game = createGameForRoom(room);
     broadcast(room);
   }
 
@@ -265,9 +308,9 @@ function maybeQuickMatch() {
 }
 
 io.on('connection', (socket) => {
-  socket.on('create', ({ playerId, name } = {}) => {
+  socket.on('create', ({ playerId, name, size } = {}) => {
     const id = String(playerId || '').slice(0, 64) || `p_${socket.id}`;
-    const room = createRoom(id);
+    const room = createRoom(id, size);
     addPlayer(room, id, name);
     bindSocket(socket, room, id);
     broadcast(room);
@@ -284,7 +327,7 @@ io.on('connection', (socket) => {
     if (room.started && !existing) {
       return socket.emit('errorMsg', 'That game has already started');
     }
-    if (!existing && room.players.length >= 4) {
+    if (!existing && room.players.length >= room.size) {
       return socket.emit('errorMsg', 'Room is full');
     }
 
@@ -305,7 +348,7 @@ io.on('connection', (socket) => {
 
     let player = room.players.find((p) => p.id === playerId);
     if (!player) {
-      if (room.started || room.players.length >= 4) {
+      if (room.started || room.players.length >= room.size) {
         return socket.emit('resumeFailed', { reason: 'player' });
       }
       player = addPlayer(room, playerId, name);
@@ -317,43 +360,79 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
-  socket.on('quickMatch', ({ playerId, name } = {}) => {
+  socket.on('quickMatch', ({ playerId, name, size } = {}) => {
     if (socket.data.code && rooms.has(socket.data.code)) {
       return socket.emit('errorMsg', 'You are already in a room');
     }
+    const wanted = gameLogic.normalizeSize(size);
     const id = String(playerId || '').slice(0, 64) || `p_${socket.id}`;
-    for (let i = quickQueue.length - 1; i >= 0; i--) {
-      if (quickQueue[i].playerId === id) quickQueue.splice(i, 1);
+    for (const queue of Object.values(quickQueues)) {
+      for (let i = queue.length - 1; i >= 0; i--) {
+        if (queue[i].playerId === id) queue.splice(i, 1);
+      }
     }
     socket.data.playerId = id;
     socket.data.queued = true;
-    quickQueue.push({ playerId: id, name: cleanName(name), socketId: socket.id });
-    maybeQuickMatch();
+    quickQueues[wanted].push({ playerId: id, name: cleanName(name), socketId: socket.id, size: wanted });
+    maybeQuickMatch(wanted);
   });
 
   socket.on('cancelQueue', () => {
     removeQueuedSocket(socket.id);
     socket.data.queued = false;
-    socket.emit('queued', { inQueue: false, count: quickQueue.length, needed: 4 });
+    socket.emit('queued', { inQueue: false, count: 0, needed: 0 });
     notifyQueue();
   });
 
-  socket.on('soloBots', ({ playerId, name } = {}) => {
+  socket.on('soloBots', ({ playerId, name, size } = {}) => {
     removeQueuedSocket(socket.id);
     socket.data.queued = false;
     notifyQueue();
     if (socket.data.code && rooms.has(socket.data.code)) {
       return socket.emit('errorMsg', 'You are already in a room');
     }
+    const wanted = gameLogic.normalizeSize(size);
     const id = String(playerId || '').slice(0, 64) || `p_${socket.id}`;
-    const room = createRoom(id);
+    const room = createRoom(id, wanted);
     addPlayer(room, id, name);
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i < wanted; i++) {
       addPlayer(room, `bot_${Math.random().toString(36).slice(2, 10)}`, `Bot ${i}`, true);
     }
     bindSocket(socket, room, id);
     room.started = true;
-    room.game = gameLogic.newGame(room.players.map((p) => p.name));
+    room.game = createGameForRoom(room);
+    broadcast(room);
+  });
+
+  socket.on('setSize', ({ size } = {}) => {
+    const { room, player } = context(socket);
+    if (!room || !player || room.started) return;
+    if (room.hostId !== player.id) return;
+
+    const nextSize = gameLogic.normalizeSize(size);
+    const humans = room.players.filter((p) => !p.isBot).length;
+    if (nextSize < humans) {
+      return socket.emit('errorMsg', `Too many players for ${nextSize} seats`);
+    }
+
+    while (room.players.length > nextSize) {
+      let botIndex = -1;
+      for (let i = room.players.length - 1; i >= 0; i--) {
+        if (room.players[i].isBot) {
+          botIndex = i;
+          break;
+        }
+      }
+      if (botIndex === -1) break;
+      room.players.splice(botIndex, 1);
+    }
+
+    if (room.players.length > nextSize) {
+      return socket.emit('errorMsg', `Too many players for ${nextSize} seats`);
+    }
+
+    room.size = nextSize;
+    reindexSeats(room);
     broadcast(room);
   });
 
@@ -361,10 +440,12 @@ io.on('connection', (socket) => {
     const { room, player } = context(socket);
     if (!room || !player || room.started) return;
     if (room.hostId !== player.id) return socket.emit('errorMsg', 'Only the host can start');
-    if (room.players.length !== 4) return socket.emit('errorMsg', 'Need 4 players (add bots to fill)');
+    if (room.players.length !== room.size) {
+      return socket.emit('errorMsg', `Need ${room.size} players (add bots to fill)`);
+    }
 
     room.started = true;
-    room.game = gameLogic.newGame(room.players.map((p) => p.name));
+    room.game = createGameForRoom(room);
     broadcast(room);
   });
 
@@ -372,7 +453,7 @@ io.on('connection', (socket) => {
     const { room, player } = context(socket);
     if (!room || !player || room.started) return;
     if (room.hostId !== player.id) return;
-    if (room.players.length >= 4) return;
+    if (room.players.length >= room.size) return;
     const botCount = room.players.filter((p) => p.isBot).length;
     addPlayer(room, `bot_${Math.random().toString(36).slice(2, 10)}`, `Bot ${botCount + 1}`, true);
     broadcast(room);
@@ -383,7 +464,7 @@ io.on('connection', (socket) => {
     if (!room || !player || room.started) return;
     if (room.hostId !== player.id) return;
     let botCount = room.players.filter((p) => p.isBot).length;
-    while (room.players.length < 4) {
+    while (room.players.length < room.size) {
       botCount += 1;
       addPlayer(room, `bot_${Math.random().toString(36).slice(2, 10)}`, `Bot ${botCount}`, true);
     }
@@ -433,7 +514,7 @@ io.on('connection', (socket) => {
     const { room, player } = context(socket);
     if (!room || !player || !room.game) return;
     if (room.hostId !== player.id) return socket.emit('errorMsg', 'Only the host can restart');
-    room.game = gameLogic.newGame(room.players.map((p) => p.name));
+    room.game = createGameForRoom(room);
     broadcast(room);
   });
 

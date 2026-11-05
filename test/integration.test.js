@@ -40,9 +40,9 @@ function connect() {
   });
 }
 
-async function createRoom(socket, id, name) {
+async function createRoom(socket, id, name, size) {
   const event = waitFor(socket, 'state', (s) => s.players.length === 1);
-  socket.emit('create', { playerId: id, name });
+  socket.emit('create', { playerId: id, name, size });
   return event;
 }
 
@@ -205,6 +205,105 @@ async function main() {
       quick.forEach((s) => s.close());
     }
 
+    /* 5b. 2-player room starts a 1v1 on opposite seats */
+    {
+      const two = await Promise.all([connect(), connect()]);
+      two.forEach(track);
+      const ids = two.map(() => uid('T'));
+      const initial = await createRoom(two[0], ids[0], 'TwoA', 2);
+      assert.equal(initial.size, 2);
+      const lobby = await joinRoom(two[1], initial.code, ids[1], 'TwoB');
+      assert.deepEqual(lobby.players.map((p) => p.seat).sort((a, b) => a - b), [0, 2]);
+
+      const started = await startRoom(two[0]);
+      assert.equal(started.size, 2);
+      assert.deepEqual(started.game.activeSeats, [0, 2]);
+      assert.deepEqual(started.teamBySeat, [0, null, 1, null]);
+      assert.equal(started.game.turn, 0);
+      two.forEach((s) => s.close());
+    }
+
+    /* 5c. 3-player room starts a three-seat game */
+    {
+      const three = await Promise.all([connect(), connect(), connect()]);
+      three.forEach(track);
+      const ids = three.map(() => uid('3P'));
+      const initial = await createRoom(three[0], ids[0], 'ThreeA', 3);
+      assert.equal(initial.size, 3);
+      await joinRoom(three[1], initial.code, ids[1], 'ThreeB');
+      const lobby = await joinRoom(three[2], initial.code, ids[2], 'ThreeC');
+      assert.deepEqual(lobby.players.map((p) => p.seat).sort((a, b) => a - b), [0, 1, 2]);
+
+      const started = await startRoom(three[0]);
+      assert.deepEqual(started.game.activeSeats, [0, 1, 2]);
+      assert.equal(started.game.turn, 0);
+      three.forEach((s) => s.close());
+    }
+
+    /* 5d. Host can shrink the room and extra bots are removed */
+    {
+      const host = track(await connect());
+      const id = uid('SIZE');
+      const initial = await createRoom(host, id, 'Sizer', 4);
+      const botsEvent = waitFor(host, 'state', (s) => s.players.length === 4);
+      host.emit('fillBots');
+      await botsEvent;
+
+      const resizedEvent = waitFor(host, 'state', (s) => s.size === 2);
+      host.emit('setSize', { size: 2 });
+      const resized = await resizedEvent;
+      assert.equal(resized.players.length, 2);
+      assert.equal(resized.players.filter((p) => p.isBot).length, 1);
+      assert.deepEqual(resized.activeSeats, [0, 2]);
+
+      const started = await startRoom(host);
+      assert.equal(started.game.size, 2);
+      assert.deepEqual(started.game.activeSeats, [0, 2]);
+      host.close();
+    }
+
+    /* 5e. Quick match supports 2 players, and solo bots honors the size */
+    {
+      const quick = await Promise.all([connect(), connect()]);
+      quick.forEach(track);
+      const ids = quick.map(() => uid('Q2'));
+      const states = quick.map((s) => waitFor(s, 'state', (st) => st.started && st.players.length === 2));
+      quick.forEach((s, i) => s.emit('quickMatch', { playerId: ids[i], name: `Q2${i}`, size: 2 }));
+      const matched = await Promise.all(states);
+      assert.equal(matched[0].size, 2);
+      assert.equal(new Set(matched.map((s) => s.code)).size, 1);
+      quick.forEach((s) => s.close());
+    }
+
+    {
+      const solo = track(await connect());
+      const id = uid('SOLO2');
+      const event = waitFor(solo, 'state', (s) => s.started && s.players.length === 2);
+      solo.emit('soloBots', { playerId: id, name: 'Solo2', size: 2 });
+      const state = await event;
+      assert.equal(state.size, 2);
+      assert.equal(state.players.filter((p) => p.isBot).length, 1);
+      assert.deepEqual(state.game.activeSeats, [0, 2]);
+      solo.close();
+    }
+
+    /* 5f. Full 2-player game reaches a winner over the wire */
+    {
+      const clients = await Promise.all([connect(), connect()]);
+      clients.forEach(track);
+      const ids = clients.map(() => uid('G2'));
+      const initial = await createRoom(clients[0], ids[0], 'G2A', 2);
+      await joinRoom(clients[1], initial.code, ids[1], 'G2B');
+
+      const finished = autoplay(clients, ids, 120000);
+      clients[0].emit('start');
+      const final = await finished;
+      assert.ok(final.game.activeSeats.includes(final.game.winnerSeat));
+      assert.ok(final.game.winnerTeam === 0 || final.game.winnerTeam === 1);
+      assert.equal(final.game.phase, 'over');
+      clients.forEach((s) => s.close());
+    }
+
     /* 6. Reconnect resumes a running game; bad resume is reported */
     {
       const host = track(await connect());
@@ -304,7 +403,7 @@ async function main() {
       assert.equal(body.version, require('../package.json').version);
     }
 
-    console.log('integration ok: rooms, full game, bots, quick match, reconnect, leave, validation, health');
+    console.log('integration ok: rooms, 2/3/4-player modes, full games, bots, quick match, reconnect, leave, validation, health');
   } finally {
     sockets.forEach((socket) => {
       try { socket.close(); } catch { /* ignore */ }

@@ -109,6 +109,52 @@ test('finishing all tokens wins the team', () => {
   assert.equal(g.phase, 'over');
 });
 
+test('2-player games use opposite seats and alternate turns', () => {
+  const g = game.newGame(['Red', 'Yellow'], { size: 2 });
+  assert.deepEqual(g.activeSeats, [0, 2]);
+  assert.equal(g.names[0], 'Red');
+  assert.equal(g.names[2], 'Yellow');
+  assert.equal(g.turn, 0);
+
+  game.rollDice(g, 0, 3);
+  assert.equal(g.turn, 2);
+  game.rollDice(g, 2, 1);
+  assert.equal(g.turn, 0);
+});
+
+test('2-player opponents can capture each other', () => {
+  const g = game.newGame(['Red', 'Yellow'], { size: 2 });
+  g.tokens[0][0].pos = 4;
+  g.tokens[2][0].pos = 32; // ring index (26 + 32) % 52 === 6
+  game.rollDice(g, 0, 2);
+  game.moveToken(g, 0, 0);
+  assert.equal(g.tokens[0][0].pos, 6);
+  assert.equal(g.tokens[2][0].pos, -1);
+});
+
+test('3-player games rotate through three seats', () => {
+  const g = game.newGame(['Red', 'Green', 'Yellow'], { size: 3 });
+  assert.deepEqual(g.activeSeats, [0, 1, 2]);
+  game.rollDice(g, 0, 3);
+  assert.equal(g.turn, 1);
+  game.rollDice(g, 1, 3);
+  assert.equal(g.turn, 2);
+  game.rollDice(g, 2, 3);
+  assert.equal(g.turn, 0);
+});
+
+test('a 2-player win records the winning seat and team', () => {
+  const g = game.newGame(['Red', 'Yellow'], { size: 2 });
+  for (let i = 0; i < 3; i++) g.tokens[2][i].pos = 56;
+  g.tokens[2][3].pos = 55;
+  g.turn = 2;
+  game.rollDice(g, 2, 1);
+  game.moveToken(g, 2, 3);
+  assert.equal(g.winnerSeat, 2);
+  assert.equal(g.winnerTeam, 1);
+  assert.equal(g.phase, 'over');
+});
+
 test('random games always terminate with a winner and valid positions', () => {
   for (let run = 0; run < 40; run++) {
     const g = fresh();
@@ -129,6 +175,26 @@ test('random games always terminate with a winner and valid positions', () => {
     }
     assert.notEqual(g.winnerTeam, null, `game ${run} did not finish`);
     assert.equal(g.phase, 'over');
+  }
+});
+
+test('2- and 3-player games also terminate with a winner', () => {
+  for (const size of [2, 3]) {
+    for (let run = 0; run < 20; run++) {
+      const g = game.newGame(['A', 'B', 'C'], { size });
+      let steps = 0;
+      while (g.winnerTeam === null && steps < 200000) {
+        steps += 1;
+        if (g.phase === 'roll') {
+          game.rollDice(g, g.turn);
+        } else if (g.phase === 'move') {
+          const choice = g.validMoves[Math.floor(Math.random() * g.validMoves.length)];
+          game.moveToken(g, g.turn, choice);
+        }
+      }
+      assert.notEqual(g.winnerTeam, null, `${size}p game ${run} did not finish`);
+      assert.ok(g.activeSeats.includes(g.winnerSeat));
+    }
   }
 });
 

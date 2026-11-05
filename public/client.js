@@ -4,9 +4,13 @@ const socket = io();
 
 const COLORS = ['red', 'green', 'yellow', 'blue'];
 const TEAM_BY_SEAT = [0, 1, 0, 1];
-const TEAM_NAMES = ['Team Red · Yellow', 'Team Green · Blue'];
+const TEAM_NAMES = ['Red & Yellow', 'Green & Blue'];
 const START_OFFSET = [0, 13, 26, 39];
 const SAFE_RING = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
+const GOAL = 56;
+const ACTIVE_SEATS_BY_SIZE = { 2: [0, 2], 3: [0, 1, 2], 4: [0, 1, 2, 3] };
+const SIZE_LABELS = { 2: '1v1', 3: '3 players', 4: '2v2' };
+const PIPS = { 1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8] };
 
 const RING = [
   [6, 1], [6, 2], [6, 3], [6, 4], [6, 5],
@@ -71,6 +75,14 @@ const GOAL_DIR = [
 const ID_KEY = 'ludoTeams.playerId';
 const ROOM_KEY = 'ludoTeams.roomCode';
 const NAME_KEY = 'ludoTeams.name';
+const SIZE_KEY = 'ludoTeams.size';
+
+function normalizeSize(value) {
+  const size = Number(value);
+  return [2, 3, 4].includes(size) ? size : 4;
+}
+
+let selectedSize = normalizeSize(localStorage.getItem(SIZE_KEY) || 4);
 
 const els = {
   home: document.getElementById('homeScreen'),
@@ -79,8 +91,12 @@ const els = {
   name: document.getElementById('nameInput'),
   code: document.getElementById('codeInput'),
   quick: document.getElementById('quickBtn'),
+  quickSub: document.getElementById('quickSub'),
   create: document.getElementById('createBtn'),
   join: document.getElementById('joinBtn'),
+  homeSizePicker: document.getElementById('homeSizePicker'),
+  waitSizePicker: document.getElementById('waitSizePicker'),
+  sizeHint: document.getElementById('sizeHint'),
   queueOverlay: document.getElementById('queueOverlay'),
   queueCount: document.getElementById('queueCount'),
   cancelQueue: document.getElementById('cancelQueueBtn'),
@@ -129,6 +145,8 @@ let autoMoveKey = null;
 let autoMoveTimer = null;
 let pulseOn = false;
 let pulseTimer = null;
+let animations = [];
+let animFrame = null;
 
 function esc(value) {
   return String(value).replace(/[&<>"']/g, (ch) => ({
@@ -173,6 +191,7 @@ socket.on('disconnect', () => {
 socket.on('resumeFailed', () => {
   localStorage.removeItem(ROOM_KEY);
   room = null;
+  animations = [];
   render();
   toast('That game is no longer available');
 });
@@ -182,11 +201,14 @@ socket.on('left', () => {
   room = null;
   lastGameId = null;
   lastNoticeSeq = 0;
+  animations = [];
   render();
   toast('You left the game');
 });
 
 socket.on('state', (state) => {
+  const oldGame = room && room.game;
+  const oldPositions = lastTokenPositions.slice();
   room = state;
   moveLock = false;
   localStorage.setItem(ROOM_KEY, state.code);
@@ -200,6 +222,14 @@ socket.on('state', (state) => {
       lastNoticeSeq = state.game.noticeSeq;
       if (state.game.noticeText) toast(state.game.noticeText);
     }
+
+    if (oldGame && oldGame.gameId === state.game.gameId) {
+      createAnimations(oldGame, state.game, oldPositions);
+    } else {
+      animations = [];
+    }
+  } else {
+    animations = [];
   }
 
   render();
@@ -233,10 +263,44 @@ function desiredName() {
   return name;
 }
 
+function chooseSize(size) {
+  selectedSize = normalizeSize(size);
+  localStorage.setItem(SIZE_KEY, String(selectedSize));
+  updateSizePickers();
+}
+
+function updateSizePickers() {
+  const roomSize = room && !room.started ? room.size : selectedSize;
+  const isHost = !!(room && room.hostId === myId);
+
+  for (const btn of els.homeSizePicker.querySelectorAll('[data-size]')) {
+    btn.classList.toggle('active', Number(btn.dataset.size) === selectedSize);
+  }
+  for (const btn of els.waitSizePicker.querySelectorAll('[data-size]')) {
+    const size = Number(btn.dataset.size);
+    btn.classList.toggle('active', size === roomSize);
+    btn.disabled = !isHost || !room;
+  }
+  els.quickSub.textContent = SIZE_LABELS[selectedSize];
+}
+
+els.homeSizePicker.addEventListener('click', (event) => {
+  const btn = event.target.closest('[data-size]');
+  if (!btn) return;
+  chooseSize(btn.dataset.size);
+});
+
+els.waitSizePicker.addEventListener('click', (event) => {
+  const btn = event.target.closest('[data-size]');
+  if (!btn || btn.disabled) return;
+  chooseSize(btn.dataset.size);
+  socket.emit('setSize', { size: selectedSize });
+});
+
 els.quick.addEventListener('click', () => {
   const name = desiredName();
   if (!name) return;
-  socket.emit('quickMatch', { playerId: myId, name });
+  socket.emit('quickMatch', { playerId: myId, name, size: selectedSize });
 });
 
 els.cancelQueue.addEventListener('click', () => {
@@ -248,7 +312,7 @@ els.solo.addEventListener('click', () => {
   const name = desiredName();
   if (!name) return;
   els.queueOverlay.classList.add('hidden');
-  socket.emit('soloBots', { playerId: myId, name });
+  socket.emit('soloBots', { playerId: myId, name, size: selectedSize });
 });
 
 function leaveRoom() {
@@ -261,7 +325,7 @@ els.leaveGame.addEventListener('click', leaveRoom);
 els.create.addEventListener('click', () => {
   const name = desiredName();
   if (!name) return;
-  socket.emit('create', { playerId: myId, name });
+  socket.emit('create', { playerId: myId, name, size: selectedSize });
 });
 
 els.join.addEventListener('click', () => {
@@ -296,6 +360,7 @@ els.restart.addEventListener('click', () => socket.emit('restart'));
 /* ---------------- Rendering ---------------- */
 
 function render() {
+  updateSizePickers();
   if (!room) {
     showScreen('home');
     return;
@@ -312,11 +377,16 @@ function render() {
 function renderWait() {
   els.roomCode.textContent = room.code;
   const isHost = room.hostId === myId;
-  els.start.disabled = !(isHost && room.players.length === 4);
-  els.fillBots.disabled = !(isHost && room.players.length < 4);
+  const size = room.size || 4;
+  const seats = room.activeSeats || ACTIVE_SEATS_BY_SIZE[size] || [0, 1, 2, 3];
+  const teamBySeat = room.teamBySeat || TEAM_BY_SEAT;
+
+  els.start.disabled = !(isHost && room.players.length === size);
+  els.fillBots.disabled = !(isHost && room.players.length < size);
+  els.sizeHint.textContent = isHost ? 'host can change' : 'set by host';
 
   els.seatList.innerHTML = '';
-  for (let seat = 0; seat < 4; seat++) {
+  for (const seat of seats) {
     const color = COLORS[seat];
     const player = room.players.find((p) => p.seat === seat);
     const seatEl = document.createElement('div');
@@ -336,7 +406,9 @@ function renderWait() {
 
     if (player) {
       nameEl.textContent = player.name;
-      subEl.textContent = `Team ${TEAM_BY_SEAT[seat] === 0 ? 'A' : 'B'} · ${color}`;
+      subEl.textContent = size === 4
+        ? `Team ${teamBySeat[seat] === 0 ? 'A' : 'B'} · ${color}`
+        : `${color}${size === 2 ? ' · 1v1' : ' · solo'}`;
     } else {
       nameEl.textContent = 'Open seat';
       subEl.textContent = 'Waiting…';
@@ -369,8 +441,8 @@ function renderWait() {
 
   if (!isHost) {
     els.waitMsg.textContent = 'Waiting for the host to start the game…';
-  } else if (room.players.length < 4) {
-    const missing = 4 - room.players.length;
+  } else if (room.players.length < size) {
+    const missing = size - room.players.length;
     els.waitMsg.textContent = `Waiting for ${missing} more player${missing > 1 ? 's' : ''} — or fill with bots.`;
   } else {
     els.waitMsg.textContent = 'All seats filled. Ready to play!';
@@ -387,6 +459,7 @@ function autoTokenChoice(game, seat) {
 }
 
 function maybeAutoMove(game, seat) {
+  if (animations.length) return;
   const pick = autoTokenChoice(game, seat);
   if (pick === null) return;
   const key = `${game.gameId}:${game.moveCount}`;
@@ -430,6 +503,28 @@ function updatePulse(game, needed) {
   }, 420);
 }
 
+function winnerLabel(game) {
+  const size = game.size || room.size || 4;
+  if (size === 4) {
+    const team = game.winnerTeam;
+    return `${TEAM_NAMES[team] || 'Team'} win!`;
+  }
+  const winner = room.players.find((p) => p.seat === game.winnerSeat);
+  return `${winner ? winner.name : COLORS[game.winnerSeat] || 'Winner'} wins!`;
+}
+
+function renderDice(value, canRoll) {
+  const dice = Number(value);
+  if (dice >= 1 && dice <= 6) {
+    const on = new Set(PIPS[dice]);
+    els.diceVal.innerHTML = `<span class="dice-grid">${Array.from({ length: 9 }, (_, i) => `<i class="pip${on.has(i) ? ' on' : ''}"></i>`).join('')}</span>`;
+  } else if (canRoll) {
+    els.diceVal.innerHTML = '<span class="dice-roll">ROLL</span>';
+  } else {
+    els.diceVal.innerHTML = '<span class="dice-idle">🎲</span>';
+  }
+}
+
 function renderGame() {
   const game = room.game;
   const player = me();
@@ -440,23 +535,38 @@ function renderGame() {
   const autoPick = canMove ? autoTokenChoice(game, mySeat) : null;
   const manualPick = canMove && autoPick === null;
   const current = room.players.find((p) => p.seat === game.turn);
+  const size = game.size || room.size || 4;
+  const activeSeats = game.activeSeats || room.activeSeats || ACTIVE_SEATS_BY_SIZE[size] || [0, 1, 2, 3];
+  const teamBySeat = game.teamBySeat || room.teamBySeat || TEAM_BY_SEAT;
 
   els.roomPill.textContent = room.code;
 
-  const activeTeam = isOver ? -1 : TEAM_BY_SEAT[game.turn];
-  els.teamBar.innerHTML = [0, 1].map((team) => {
-    const seats = team === 0 ? [0, 2] : [1, 3];
-    const swatches = seats.map((s) => `<span class="sw" style="background:${PALETTE[COLORS[s]].main}"></span>`).join('');
-    const color = team === 0 ? PALETTE.yellow.main : PALETTE.blue.main;
-    return `<div class="team-chip${activeTeam === team ? ' active' : ''}" style="color:${color}">
-      ${swatches}<span>Team ${team === 0 ? 'A' : 'B'}</span>
-    </div>`;
-  }).join('');
+  if (size === 4) {
+    const activeTeam = isOver ? -1 : teamBySeat[game.turn];
+    els.teamBar.innerHTML = [0, 1].map((team) => {
+      const seats = activeSeats.filter((seat) => teamBySeat[seat] === team);
+      const swatches = seats.map((s) => `<span class="sw" style="background:${PALETTE[COLORS[s]].main}"></span>`).join('');
+      const color = team === 0 ? PALETTE.yellow.main : PALETTE.blue.main;
+      return `<div class="team-chip${activeTeam === team ? ' active' : ''}" style="color:${color}">
+        ${swatches}<span>Team ${team === 0 ? 'A' : 'B'}</span>
+      </div>`;
+    }).join('');
+  } else {
+    els.teamBar.innerHTML = activeSeats.map((seat) => {
+      const owner = room.players.find((p) => p.seat === seat);
+      const pal = PALETTE[COLORS[seat]];
+      const active = !isOver && game.turn === seat;
+      return `<div class="team-chip player-chip${active ? ' active' : ''}" style="--chip:${pal.main};color:${pal.main}">
+        <span class="sw" style="background:${pal.main}"></span>
+        <span class="chip-name">${esc(owner ? owner.name : COLORS[seat])}</span>
+      </div>`;
+    }).join('');
+  }
 
   drawBoard(game);
 
   if (isOver) {
-    els.turnInfo.innerHTML = `<span class="who">${esc(TEAM_NAMES[game.winnerTeam])} win!</span>`;
+    els.turnInfo.innerHTML = `<span class="who">${esc(winnerLabel(game))}</span>`;
   } else if (current) {
     const swatch = `<span class="sw" style="background:${PALETTE[COLORS[game.turn]].main}"></span>`;
     let suffix = '';
@@ -470,10 +580,10 @@ function renderGame() {
     els.turnInfo.textContent = '';
   }
 
-  const canRoll = isMyTurn && game.phase === 'roll';
+  const canRoll = isMyTurn && game.phase === 'roll' && animations.length === 0;
   els.diceBtn.disabled = !canRoll;
   els.diceBtn.classList.toggle('pulse', canRoll);
-  els.diceVal.textContent = game.dice ? String(game.dice) : '🎲';
+  renderDice(game.dice, canRoll);
 
   const showHint = canMove && !isOver;
   els.moveHint.classList.toggle('hidden', !showHint);
@@ -487,9 +597,11 @@ function renderGame() {
   els.log.scrollTop = els.log.scrollHeight;
 
   if (isOver) {
-    els.banner.classList.remove('hidden');
-    els.bannerTitle.textContent = `${TEAM_NAMES[game.winnerTeam]} win!`;
-    els.bannerText.textContent = 'Great game — the paired team takes it.';
+    els.banner.classList.toggle('hidden', animations.length > 0);
+    els.bannerTitle.textContent = winnerLabel(game);
+    els.bannerText.textContent = size === 4
+      ? 'Great game — the paired team takes it.'
+      : 'First to bring all 4 pawns home wins.';
     els.restart.classList.toggle('hidden', room.hostId !== myId);
   } else {
     els.banner.classList.add('hidden');
@@ -533,13 +645,17 @@ function drawCell(r, c, fill, stroke, lineWidth = 1.5) {
   ctx.stroke();
 }
 
-function drawYards() {
+function drawYards(activeSeats) {
   for (let seat = 0; seat < 4; seat++) {
+    const inactive = activeSeats && !activeSeats.has(seat);
     const pal = PALETTE[COLORS[seat]];
     const block = YARD_BLOCK[seat];
     const x = block.c * CELL;
     const y = block.r * CELL;
     const size = 6 * CELL;
+
+    ctx.save();
+    if (inactive) ctx.globalAlpha = 0.32;
 
     roundRectPath(x + CELL * 0.18, y + CELL * 0.18, size - CELL * 0.36, size - CELL * 0.36, CELL * 0.6);
     ctx.fillStyle = pal.soft;
@@ -565,18 +681,23 @@ function drawYards() {
       ctx.lineWidth = 2;
       ctx.stroke();
     }
+    ctx.restore();
   }
 }
 
-function drawRing() {
+function drawRing(activeSeats) {
   for (let idx = 0; idx < RING.length; idx++) {
     const [r, c] = RING[idx];
     const startSeat = START_OFFSET.indexOf(idx);
+    const activeStart = startSeat >= 0 && (!activeSeats || activeSeats.has(startSeat));
 
-    if (startSeat >= 0) {
+    if (activeStart) {
       const pal = PALETTE[COLORS[startSeat]];
       drawCell(r, c, pal.soft, pal.main, 2.5);
       drawStar(c * CELL + CELL / 2, r * CELL + CELL / 2, CELL * 0.22, CELL * 0.1, pal.main);
+    } else if (startSeat >= 0) {
+      drawCell(r, c, '#f2f5fa', '#cdd5e3');
+      drawStar(c * CELL + CELL / 2, r * CELL + CELL / 2, CELL * 0.18, CELL * 0.08, '#c3cbdb');
     } else if (SAFE_RING.has(idx)) {
       drawCell(r, c, '#ffffff', '#c8d1e0');
       drawStar(c * CELL + CELL / 2, r * CELL + CELL / 2, CELL * 0.2, CELL * 0.09, '#aeb9cd');
@@ -586,12 +707,16 @@ function drawRing() {
   }
 }
 
-function drawHomeColumns() {
+function drawHomeColumns(activeSeats) {
   for (let seat = 0; seat < 4; seat++) {
+    const inactive = activeSeats && !activeSeats.has(seat);
     const pal = PALETTE[COLORS[seat]];
+    ctx.save();
+    if (inactive) ctx.globalAlpha = 0.35;
     for (const [r, c] of HOME_COLS[seat]) {
       drawCell(r, c, pal.soft, pal.main, 2);
     }
+    ctx.restore();
   }
 }
 
@@ -630,8 +755,9 @@ function drawCenter() {
 function computeTokenPositions(game) {
   const positions = [];
   const groups = new Map();
+  const seats = game.activeSeats || [0, 1, 2, 3];
 
-  for (let seat = 0; seat < 4; seat++) {
+  for (const seat of seats) {
     for (let i = 0; i < 4; i++) {
       const pos = game.tokens[seat][i].pos;
       if (pos >= 0 && pos <= 55) {
@@ -667,7 +793,7 @@ function computeTokenPositions(game) {
     });
   }
 
-  for (let seat = 0; seat < 4; seat++) {
+  for (const seat of seats) {
     const center = YARD_CENTER[seat];
     for (let i = 0; i < 4; i++) {
       if (game.tokens[seat][i].pos === -1) {
@@ -682,7 +808,7 @@ function computeTokenPositions(game) {
     }
   }
 
-  for (let seat = 0; seat < 4; seat++) {
+  for (const seat of seats) {
     let count = 0;
     for (let i = 0; i < 4; i++) {
       if (game.tokens[seat][i].pos === 56) {
@@ -758,11 +884,105 @@ function drawTokens(positions, game, movable, turnSeat) {
   }
 }
 
+function cellCenter(seat, pos) {
+  if (pos >= 0 && pos <= 50) {
+    const [r, c] = RING[(START_OFFSET[seat] + pos) % 52];
+    return { x: (c + 0.5) * CELL, y: (r + 0.5) * CELL };
+  }
+  if (pos >= 51 && pos <= 55) {
+    const [r, c] = HOME_COLS[seat][pos - 51];
+    return { x: (c + 0.5) * CELL, y: (r + 0.5) * CELL };
+  }
+  return null;
+}
+
+function createAnimations(oldGame, newGame, oldPositions) {
+  animations = [];
+  const oldMap = new Map(oldPositions.map((p) => [`${p.seat}:${p.i}`, p]));
+  const newMap = new Map(computeTokenPositions(newGame).map((p) => [`${p.seat}:${p.i}`, p]));
+  const seats = oldGame.activeSeats || [0, 1, 2, 3];
+  const now = performance.now();
+
+  for (const seat of seats) {
+    for (let i = 0; i < 4; i++) {
+      const oldPos = oldGame.tokens[seat][i].pos;
+      const newPos = newGame.tokens[seat][i].pos;
+      if (oldPos === newPos) continue;
+
+      const key = `${seat}:${i}`;
+      const from = oldMap.get(key);
+      const to = newMap.get(key);
+      if (!from || !to) continue;
+
+      const points = [{ x: from.x, y: from.y }];
+      if (oldPos === -1 && newPos === 0) {
+        const start = cellCenter(seat, 0);
+        if (start) points.push(start);
+      } else if (oldPos >= 0 && newPos > oldPos && newPos <= GOAL) {
+        for (let pos = oldPos + 1; pos < newPos; pos++) {
+          const center = cellCenter(seat, pos);
+          if (center) points.push(center);
+        }
+      } else if (oldPos >= 0 && newPos === -1) {
+        // captured: slide straight back to the yard
+      } else {
+        continue;
+      }
+
+      points.push({ x: to.x, y: to.y });
+      if (points.length < 2) continue;
+      animations.push({
+        seat,
+        i,
+        points,
+        start: now,
+        duration: Math.max(280, (points.length - 1) * 135),
+      });
+    }
+  }
+
+  if (animations.length) startAnimLoop();
+}
+
+function animPoint(animation, now) {
+  const progress = Math.min(1, Math.max(0, (now - animation.start) / animation.duration));
+  const segments = animation.points.length - 1;
+  const scaled = progress * segments;
+  const index = Math.min(segments - 1, Math.floor(scaled));
+  const local = scaled - index;
+  const from = animation.points[index];
+  const to = animation.points[index + 1];
+  return {
+    x: from.x + (to.x - from.x) * local,
+    y: from.y + (to.y - from.y) * local - Math.sin(local * Math.PI) * CELL * 0.16,
+  };
+}
+
+function startAnimLoop() {
+  if (animFrame) return;
+  const step = (now) => {
+    animFrame = null;
+    let active = false;
+    for (const animation of animations) {
+      if (now < animation.start + animation.duration) active = true;
+    }
+    if (room && room.game) drawBoard(room.game);
+    if (active) {
+      animFrame = requestAnimationFrame(step);
+    } else {
+      animations = [];
+      if (room && room.started && room.game) renderGame();
+    }
+  };
+  animFrame = requestAnimationFrame(step);
+}
+
 function drawBoard(game) {
   const player = me();
   const mySeat = player ? player.seat : -1;
   const isMyTurn = game.winnerTeam === null && game.turn === mySeat;
   const movable = new Set(isMyTurn && game.phase === 'move' ? game.validMoves : []);
+  const activeSet = new Set(game.activeSeats || [0, 1, 2, 3]);
 
   ctx.clearRect(0, 0, SIZE, SIZE);
   roundRectPath(0, 0, SIZE, SIZE, SIZE * 0.036);
@@ -772,14 +992,26 @@ function drawBoard(game) {
   roundRectPath(0, 0, SIZE, SIZE, SIZE * 0.036);
   ctx.clip();
 
-  drawYards();
-  drawRing();
-  drawHomeColumns();
+  drawYards(activeSet);
+  drawRing(activeSet);
+  drawHomeColumns(activeSet);
   drawCenter();
 
   const positions = computeTokenPositions(game);
   lastTokenPositions = positions;
-  drawTokens(positions, game, movable, game.turn);
+
+  if (animations.length) {
+    const now = performance.now();
+    const drawn = positions.map((pos) => {
+      const animation = animations.find((a) => a.seat === pos.seat && a.i === pos.i);
+      if (!animation) return pos;
+      const point = animPoint(animation, now);
+      return { ...pos, x: point.x, y: point.y };
+    });
+    drawTokens(drawn, game, movable, game.turn);
+  } else {
+    drawTokens(positions, game, movable, game.turn);
+  }
 
   ctx.restore();
 }
@@ -789,6 +1021,10 @@ function drawBoard(game) {
 els.diceBtn.addEventListener('click', () => {
   if (!room || !room.game || els.diceBtn.disabled) return;
   els.diceBtn.disabled = true;
+  els.diceBtn.classList.remove('rolling');
+  void els.diceBtn.offsetWidth;
+  els.diceBtn.classList.add('rolling');
+  setTimeout(() => els.diceBtn.classList.remove('rolling'), 500);
   socket.emit('roll');
 });
 
@@ -798,6 +1034,7 @@ canvas.addEventListener('click', (event) => {
   const player = me();
   if (!player) return;
   if (game.winnerTeam !== null) return;
+  if (animations.length) return;
   if (game.turn !== player.seat || game.phase !== 'move' || moveLock) return;
 
   const rect = canvas.getBoundingClientRect();

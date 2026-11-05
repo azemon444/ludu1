@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <meta name="theme-color" content="#0b1220" />
-  <title>Ludo Teams — Play online 2v2</title>
+  <meta name="theme-color" content="#070b16" />
+  <title>Ludo — 2 to 4 players online</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -18,31 +18,43 @@
     <section id="homeScreen" class="screen home">
       <header class="brand">
         <div class="logo">🎲</div>
-        <h1>Ludo <span>Teams</span></h1>
-        <p>4 players · 2 teams · play online</p>
+        <h1>Ludo</h1>
+        <p class="tagline">2–4 players · play online</p>
       </header>
 
       <div class="card">
-        <label for="nameInput">Your name</label>
-        <input id="nameInput" maxlength="16" autocomplete="off" placeholder="Enter your name" />
+        <div class="field">
+          <label for="nameInput">Your name</label>
+          <input id="nameInput" maxlength="16" autocomplete="off" placeholder="Enter your name" />
+        </div>
 
-        <button id="quickBtn" class="btn primary">Quick match <span class="btn-sub">4 players</span></button>
+        <div class="field">
+          <label>Players</label>
+          <div id="homeSizePicker" class="size-picker" role="group" aria-label="Number of players">
+            <button type="button" class="size-opt" data-size="2">2<span>1v1</span></button>
+            <button type="button" class="size-opt" data-size="3">3<span>solo</span></button>
+            <button type="button" class="size-opt" data-size="4">4<span>2v2</span></button>
+          </div>
+        </div>
+
+        <button id="quickBtn" class="btn primary">Quick match <span class="btn-sub" id="quickSub">2v2</span></button>
         <button id="createBtn" class="btn">Create a private room</button>
 
         <div class="divider"><span>or join with a code</span></div>
 
         <div class="join-row">
-          <input id="codeInput" maxlength="4" inputmode="text" autocomplete="off" placeholder="CODE" />
+          <input id="codeInput" maxlength="4" inputmode="text" autocomplete="off" placeholder="CODE" aria-label="Room code" />
           <button id="joinBtn" class="btn">Join</button>
         </div>
       </div>
 
       <p class="hint">
-        Pairs: <b class="t-red">Red</b> + <b class="t-yellow">Yellow</b>
+        <b class="t-red">Red</b> + <b class="t-yellow">Yellow</b>
         <span class="vs">vs</span>
         <b class="t-green">Green</b> + <b class="t-blue">Blue</b>
+        <span class="hint-note">in 4-player games</span>
       </p>
-      <p class="hint tiny">Roll a 6 to leave the yard · get all 4 tokens home to win for your team</p>
+      <p class="hint tiny">Roll a 6 to leave the yard · first to bring all 4 pawns home wins</p>
     </section>
 
     <section id="waitScreen" class="screen hidden">
@@ -55,6 +67,15 @@
           <div class="head-actions">
             <button id="copyBtn" class="btn ghost small">Copy</button>
             <button id="leaveWaitBtn" class="btn ghost small">Leave</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Game size <span id="sizeHint" class="label-note">host can change</span></label>
+          <div id="waitSizePicker" class="size-picker" role="group" aria-label="Game size">
+            <button type="button" class="size-opt" data-size="2">2<span>1v1</span></button>
+            <button type="button" class="size-opt" data-size="3">3<span>solo</span></button>
+            <button type="button" class="size-opt" data-size="4">4<span>2v2</span></button>
           </div>
         </div>
 
@@ -89,8 +110,8 @@
 
       <div class="controls">
         <div class="turn-info" id="turnInfo">Waiting…</div>
-        <button id="diceBtn" class="dice" disabled>
-          <span id="diceVal">🎲</span>
+        <button id="diceBtn" class="dice" disabled aria-label="Roll dice">
+          <span id="diceVal"><span class="dice-idle">🎲</span></span>
         </button>
         <div class="log" id="log"></div>
       </div>
