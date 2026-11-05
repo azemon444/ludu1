@@ -90,30 +90,50 @@
     </section>
 
     <section id="gameScreen" class="screen game hidden">
-      <div class="game-head">
-        <div class="head-actions">
-          <div class="pill" id="roomPill">----</div>
-          <button id="leaveGameBtn" class="btn ghost small">Leave</button>
+      <div class="game-layout">
+        <div class="game-head">
+          <div class="head-actions">
+            <div class="pill" id="roomPill">----</div>
+            <button id="leaveGameBtn" class="btn ghost small">Leave</button>
+          </div>
+          <div class="team-bar" id="teamBar"></div>
         </div>
-        <div class="team-bar" id="teamBar"></div>
-      </div>
 
-      <div class="board-wrap">
-        <canvas id="board" width="720" height="720"></canvas>
-        <div id="moveHint" class="move-hint hidden">Tap a glowing token</div>
-        <div id="banner" class="banner hidden">
-          <div id="bannerTitle" class="banner-title"></div>
-          <div id="bannerText" class="banner-text"></div>
-          <button id="restartBtn" class="btn primary hidden">Play again</button>
+        <div class="board-wrap">
+          <canvas id="board" width="720" height="720"></canvas>
+          <div id="moveHint" class="move-hint hidden">Tap a glowing token</div>
+          <div id="banner" class="banner hidden">
+            <div id="bannerTitle" class="banner-title"></div>
+            <div id="bannerText" class="banner-text"></div>
+            <button id="restartBtn" class="btn primary hidden">Play again</button>
+          </div>
         </div>
-      </div>
 
-      <div class="controls">
-        <div class="turn-info" id="turnInfo">Waiting…</div>
-        <button id="diceBtn" class="dice" disabled aria-label="Roll dice">
-          <span id="diceVal"><span class="dice-idle">🎲</span></span>
-        </button>
-        <div class="log" id="log"></div>
+        <aside class="game-side">
+          <div class="turn-card" id="turnCard">
+            <div class="turn-kicker" id="turnKicker">Waiting</div>
+            <div class="turn-info" id="turnInfo">Waiting…</div>
+            <div class="turn-sub" id="turnSub">Getting the board ready…</div>
+          </div>
+
+          <div class="dice-card">
+            <div class="panel-label">Dice</div>
+            <button id="diceBtn" class="dice" disabled aria-label="Roll dice">
+              <span id="diceVal"><span class="dice-idle">🎲</span></span>
+            </button>
+            <div class="dice-hint" id="diceHint">Waiting…</div>
+          </div>
+
+          <div class="players-card">
+            <div class="panel-label">Players</div>
+            <div class="player-list" id="playerList"></div>
+          </div>
+
+          <div class="log-card">
+            <div class="panel-label">Game log</div>
+            <div class="log" id="log"></div>
+          </div>
+        </aside>
       </div>
     </section>
   </div>

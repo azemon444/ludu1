@@ -42,10 +42,10 @@ const YARD_BLOCK = [
 ];
 
 const PALETTE = {
-  red: { main: '#ef5350', dark: '#c73e3b', soft: '#fbe3e2' },
-  green: { main: '#2ecc71', dark: '#22a85c', soft: '#dcf7e8' },
-  yellow: { main: '#f4c542', dark: '#cfa318', soft: '#fdf3d3' },
-  blue: { main: '#4aa0e0', dark: '#2f7db8', soft: '#dcecf9' },
+  red: { main: '#ef5350', dark: '#c73e3b', soft: '#f9d5d3' },
+  green: { main: '#2ecc71', dark: '#22a85c', soft: '#c9f1da' },
+  yellow: { main: '#f4c542', dark: '#cfa318', soft: '#fbe9b8' },
+  blue: { main: '#4aa0e0', dark: '#2f7db8', soft: '#cbe4f8' },
 };
 
 const SIZE = 720;
@@ -112,10 +112,15 @@ const els = {
   waitMsg: document.getElementById('waitMsg'),
   roomPill: document.getElementById('roomPill'),
   teamBar: document.getElementById('teamBar'),
+  turnCard: document.getElementById('turnCard'),
+  turnKicker: document.getElementById('turnKicker'),
   turnInfo: document.getElementById('turnInfo'),
+  turnSub: document.getElementById('turnSub'),
+  playerList: document.getElementById('playerList'),
   moveHint: document.getElementById('moveHint'),
   diceBtn: document.getElementById('diceBtn'),
   diceVal: document.getElementById('diceVal'),
+  diceHint: document.getElementById('diceHint'),
   log: document.getElementById('log'),
   banner: document.getElementById('banner'),
   bannerTitle: document.getElementById('bannerTitle'),
@@ -140,6 +145,7 @@ let lastTokenPositions = [];
 let toastTimer = null;
 let lastGameId = null;
 let lastNoticeSeq = 0;
+let lastDice = null;
 let moveLock = false;
 let autoMoveKey = null;
 let autoMoveTimer = null;
@@ -191,6 +197,9 @@ socket.on('disconnect', () => {
 socket.on('resumeFailed', () => {
   localStorage.removeItem(ROOM_KEY);
   room = null;
+  lastGameId = null;
+  lastNoticeSeq = 0;
+  lastDice = null;
   animations = [];
   render();
   toast('That game is no longer available');
@@ -201,6 +210,7 @@ socket.on('left', () => {
   room = null;
   lastGameId = null;
   lastNoticeSeq = 0;
+  lastDice = null;
   animations = [];
   render();
   toast('You left the game');
@@ -218,10 +228,14 @@ socket.on('state', (state) => {
     if (state.game.gameId !== lastGameId) {
       lastGameId = state.game.gameId;
       lastNoticeSeq = state.game.noticeSeq;
+      lastDice = null;
     } else if (state.game.noticeSeq > lastNoticeSeq) {
       lastNoticeSeq = state.game.noticeSeq;
       if (state.game.noticeText) toast(state.game.noticeText);
     }
+
+    const rolled = Number(state.game.dice);
+    if (rolled >= 1 && rolled <= 6) lastDice = rolled;
 
     if (oldGame && oldGame.gameId === state.game.gameId) {
       createAnimations(oldGame, state.game, oldPositions);
@@ -229,6 +243,7 @@ socket.on('state', (state) => {
       animations = [];
     }
   } else {
+    lastDice = null;
     animations = [];
   }
 
@@ -538,6 +553,7 @@ function renderGame() {
   const size = game.size || room.size || 4;
   const activeSeats = game.activeSeats || room.activeSeats || ACTIVE_SEATS_BY_SIZE[size] || [0, 1, 2, 3];
   const teamBySeat = game.teamBySeat || room.teamBySeat || TEAM_BY_SEAT;
+  const turnPal = PALETTE[COLORS[game.turn]] || PALETTE.red;
 
   els.roomPill.textContent = room.code;
 
@@ -565,25 +581,46 @@ function renderGame() {
 
   drawBoard(game);
 
+  els.turnCard.style.setProperty('--turn-color', turnPal.main);
+  els.turnCard.style.setProperty('--turn-soft', `${turnPal.main}22`);
+  els.turnCard.classList.toggle('mine', isMyTurn);
+
   if (isOver) {
+    els.turnKicker.textContent = 'Game over';
     els.turnInfo.innerHTML = `<span class="who">${esc(winnerLabel(game))}</span>`;
+    els.turnSub.textContent = size === 4
+      ? 'The paired team brought all pawns home.'
+      : 'All four pawns made it home.';
   } else if (current) {
     const swatch = `<span class="sw" style="background:${PALETTE[COLORS[game.turn]].main}"></span>`;
-    let suffix = '';
+    els.turnKicker.textContent = isMyTurn ? 'Your turn' : current.isBot ? 'Bot turn' : 'Opponent turn';
+    els.turnInfo.innerHTML = `<span class="who">${swatch}${esc(current.name)}</span>`;
     if (isMyTurn) {
-      if (game.phase === 'move') suffix = manualPick ? ' — tap a glowing token' : ' — moving…';
-      else suffix = ' — your turn';
-    } else if (current.isBot) suffix = ' is thinking…';
-    else if (!current.connected) suffix = ' is offline…';
-    els.turnInfo.innerHTML = `<span class="who">${swatch}${esc(current.name)}${suffix}</span>`;
+      els.turnSub.textContent = game.phase === 'move'
+        ? (manualPick ? 'Tap a glowing pawn to move' : 'Moving your pawn…')
+        : 'Roll the dice to play';
+    } else if (current.isBot) {
+      els.turnSub.textContent = 'Thinking about the next move…';
+    } else if (!current.connected) {
+      els.turnSub.textContent = 'Waiting for them to reconnect…';
+    } else {
+      els.turnSub.textContent = 'Rolling and moving…';
+    }
   } else {
+    els.turnKicker.textContent = 'Waiting';
     els.turnInfo.textContent = '';
+    els.turnSub.textContent = 'Getting the board ready…';
   }
 
   const canRoll = isMyTurn && game.phase === 'roll' && animations.length === 0;
   els.diceBtn.disabled = !canRoll;
   els.diceBtn.classList.toggle('pulse', canRoll);
-  renderDice(game.dice, canRoll);
+  renderDice(lastDice, canRoll);
+  els.diceHint.textContent = isOver
+    ? 'Game over'
+    : isMyTurn
+      ? (game.phase === 'roll' ? (canRoll ? 'Tap the die to roll' : 'Moving…') : 'Move a pawn')
+      : current ? `${current.name} is up` : 'Waiting…';
 
   const showHint = canMove && !isOver;
   els.moveHint.classList.toggle('hidden', !showHint);
@@ -593,7 +630,33 @@ function renderGame() {
   if (canMove) maybeAutoMove(game, mySeat);
   updatePulse(game, canMove);
 
-  els.log.innerHTML = game.log.slice(-3).map((line) => esc(line)).join('<br>');
+  els.playerList.innerHTML = activeSeats.map((seat) => {
+    const owner = room.players.find((p) => p.seat === seat);
+    const pal = PALETTE[COLORS[seat]];
+    const active = !isOver && game.turn === seat;
+    const isYou = !!(owner && owner.id === myId);
+    const home = game.tokens[seat] ? game.tokens[seat].filter((t) => t.pos === 56).length : 0;
+    const team = teamBySeat[seat];
+    const sub = [size === 4 ? `Team ${team === 0 ? 'A' : 'B'}` : size === 2 ? '1v1' : 'Solo'];
+    if (isYou) sub.push('You');
+    else if (owner && owner.isBot) sub.push('Bot');
+    else if (owner && !owner.connected) sub.push('Offline');
+    const name = owner ? owner.name : COLORS[seat];
+    const initial = esc((name.trim().charAt(0) || '?').toUpperCase());
+    return `<div class="player-row${active ? ' active' : ''}${isYou ? ' you' : ''}" style="--pc:${pal.main}">
+      <span class="avatar">${initial}</span>
+      <span class="player-meta">
+        <span class="player-name">${esc(name)}</span>
+        <span class="player-sub">${esc(sub.join(' · '))}</span>
+      </span>
+      <span class="home-pips">${[0, 1, 2, 3].map((k) => `<i class="${k < home ? 'on' : ''}"></i>`).join('')}</span>
+    </div>`;
+  }).join('');
+
+  const logLines = game.log.slice(-5);
+  els.log.innerHTML = logLines.length
+    ? logLines.map((line) => esc(line)).join('<br>')
+    : '<span class="log-empty">Waiting for the first move…</span>';
   els.log.scrollTop = els.log.scrollHeight;
 
   if (isOver) {
@@ -645,7 +708,7 @@ function drawCell(r, c, fill, stroke, lineWidth = 1.5) {
   ctx.stroke();
 }
 
-function drawYards(activeSeats) {
+function drawYards(activeSeats, turnSeat) {
   for (let seat = 0; seat < 4; seat++) {
     const inactive = activeSeats && !activeSeats.has(seat);
     const pal = PALETTE[COLORS[seat]];
@@ -656,13 +719,18 @@ function drawYards(activeSeats) {
 
     ctx.save();
     if (inactive) ctx.globalAlpha = 0.32;
+    if (seat === turnSeat) {
+      ctx.shadowColor = pal.main;
+      ctx.shadowBlur = 20;
+    }
 
     roundRectPath(x + CELL * 0.18, y + CELL * 0.18, size - CELL * 0.36, size - CELL * 0.36, CELL * 0.6);
     ctx.fillStyle = pal.soft;
     ctx.fill();
     ctx.strokeStyle = pal.main;
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = seat === turnSeat ? 4 : 2.5;
     ctx.stroke();
+    ctx.shadowBlur = 0;
 
     roundRectPath(x + CELL * 0.95, y + CELL * 0.95, size - CELL * 1.9, size - CELL * 1.9, CELL * 0.45);
     ctx.fillStyle = '#ffffff';
@@ -707,14 +775,18 @@ function drawRing(activeSeats) {
   }
 }
 
-function drawHomeColumns(activeSeats) {
+function drawHomeColumns(activeSeats, turnSeat) {
   for (let seat = 0; seat < 4; seat++) {
     const inactive = activeSeats && !activeSeats.has(seat);
     const pal = PALETTE[COLORS[seat]];
     ctx.save();
     if (inactive) ctx.globalAlpha = 0.35;
+    if (seat === turnSeat) {
+      ctx.shadowColor = pal.main;
+      ctx.shadowBlur = 8;
+    }
     for (const [r, c] of HOME_COLS[seat]) {
-      drawCell(r, c, pal.soft, pal.main, 2);
+      drawCell(r, c, pal.soft, pal.main, seat === turnSeat ? 2.6 : 2);
     }
     ctx.restore();
   }
@@ -789,7 +861,7 @@ function computeTokenPositions(game) {
         dx = Math.cos(angle) * radius;
         dy = Math.sin(angle) * radius;
       }
-      positions.push({ seat: token.seat, i: token.i, x: cx + dx, y: cy + dy, r: CELL * 0.3 });
+      positions.push({ seat: token.seat, i: token.i, x: cx + dx, y: cy + dy, r: CELL * 0.32 });
     });
   }
 
@@ -802,7 +874,7 @@ function computeTokenPositions(game) {
           seat, i,
           x: center.x + off.x * CELL,
           y: center.y + off.y * CELL,
-          r: CELL * 0.35,
+          r: CELL * 0.37,
         });
       }
     }
@@ -820,7 +892,7 @@ function computeTokenPositions(game) {
           seat, i,
           x: SIZE / 2 + dir.x * base + perp.x * spread,
           y: SIZE / 2 + dir.y * base + perp.y * spread,
-          r: CELL * 0.16,
+          r: CELL * 0.17,
           home: true,
         });
         count += 1;
@@ -983,18 +1055,23 @@ function drawBoard(game) {
   const isMyTurn = game.winnerTeam === null && game.turn === mySeat;
   const movable = new Set(isMyTurn && game.phase === 'move' ? game.validMoves : []);
   const activeSet = new Set(game.activeSeats || [0, 1, 2, 3]);
+  const turnSeat = game.winnerTeam === null ? game.turn : -1;
 
   ctx.clearRect(0, 0, SIZE, SIZE);
   roundRectPath(0, 0, SIZE, SIZE, SIZE * 0.036);
-  ctx.fillStyle = '#f6f8fc';
+  const bg = ctx.createLinearGradient(0, 0, SIZE, SIZE);
+  bg.addColorStop(0, '#fbfcff');
+  bg.addColorStop(0.55, '#f4f7fd');
+  bg.addColorStop(1, '#eef2fa');
+  ctx.fillStyle = bg;
   ctx.fill();
   ctx.save();
   roundRectPath(0, 0, SIZE, SIZE, SIZE * 0.036);
   ctx.clip();
 
-  drawYards(activeSet);
+  drawYards(activeSet, turnSeat);
   drawRing(activeSet);
-  drawHomeColumns(activeSet);
+  drawHomeColumns(activeSet, turnSeat);
   drawCenter();
 
   const positions = computeTokenPositions(game);
