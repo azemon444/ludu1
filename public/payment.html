@@ -60,6 +60,10 @@
           try {
             const response = await fetch(`/api/payments/status?order=${encodeURIComponent(order)}`, { cache: 'no-store' });
             const data = await response.json().catch(() => ({}));
+            if (response.status === 404) {
+              finish('error', 'Order not found', 'This order no longer exists. Start a new checkout from the coin store.');
+              return;
+            }
             if (data.status === 'paid') {
               finish('success', 'Payment complete', `${Number(data.coins || 0).toLocaleString('en-US')} coins added to your wallet.`);
               return;

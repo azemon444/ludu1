@@ -85,7 +85,6 @@ function createOrder({ playerId, name, packId }) {
     coins: pack.coins,
     amount: pack.amount,
     status: 'pending',
-    invoiceId: null,
     paymentUrl: null,
     transactionId: null,
     method: null,
@@ -99,10 +98,9 @@ function createOrder({ playerId, name, packId }) {
   return order;
 }
 
-function attachInvoice(orderId, { invoiceId, paymentUrl }) {
+function attachPaymentUrl(orderId, paymentUrl) {
   const order = data.orders[orderId];
   if (!order) return null;
-  order.invoiceId = invoiceId || null;
   order.paymentUrl = paymentUrl || null;
   order.updatedAt = new Date().toISOString();
   persist();
@@ -161,20 +159,13 @@ function getOrder(orderId) {
   return data.orders[String(orderId || '')] || null;
 }
 
-function getOrderByInvoice(invoiceId) {
-  const id = String(invoiceId || '');
-  if (!id) return null;
-  return Object.values(data.orders).find((order) => order.invoiceId === id) || null;
-}
-
 module.exports = {
   publicPacks,
   getPack,
   getWallet,
   createOrder,
-  attachInvoice,
+  attachPaymentUrl,
   markPaid,
   markFailed,
   getOrder,
-  getOrderByInvoice,
 };

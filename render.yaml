@@ -12,7 +12,7 @@ services:
         value: "20"
       - key: PUBLIC_BASE_URL
         value: https://ludu1.onrender.com
-      - key: ZINIPAY_API_KEY
+      - key: PAYMENT_CHECKOUT_URL
         sync: false
-      - key: ZINIPAY_WEBHOOK_SECRET
+      - key: PAYMENT_SETTLE_SECRET
         sync: false

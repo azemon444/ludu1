@@ -326,7 +326,7 @@ async function loadStore() {
     renderStorePacks();
     els.storeStatus.textContent = storeConfigured
       ? ''
-      : 'Payments are not configured yet. Add the ZiniPay API key to enable checkout.';
+      : 'Top-ups are not available yet. Connect your payment page to enable checkout.';
   } catch (error) {
     els.storeStatus.textContent = error.message;
   } finally {
@@ -377,7 +377,7 @@ function openStore() {
   storeReturnFocus = document.activeElement;
   els.storeModal.classList.remove('hidden');
   els.storeStatus.textContent = storePacks.length && !storeConfigured
-    ? 'Payments are not configured yet. Add the ZiniPay API key to enable checkout.'
+    ? 'Top-ups are not available yet. Connect your payment page to enable checkout.'
     : '';
   if (!storePacks.length) loadStore();
   els.closeStore.focus();
