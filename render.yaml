@@ -10,3 +10,9 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "20"
+      - key: PUBLIC_BASE_URL
+        value: https://ludu1.onrender.com
+      - key: ZINIPAY_API_KEY
+        sync: false
+      - key: ZINIPAY_WEBHOOK_SECRET
+        sync: false

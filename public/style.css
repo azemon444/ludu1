@@ -806,6 +806,229 @@ canvas {
 
 .log-empty { opacity: 0.65; font-style: italic; }
 
+/* ---------- Wallet / store ---------- */
+.wallet-strip {
+  width: 100%;
+  max-width: 460px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 16px 40px rgba(2, 6, 18, 0.28);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.coin-mark {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: radial-gradient(circle at 34% 28%, #fff3b8, #f4c542 48%, #b47b0c 100%);
+  box-shadow: 0 7px 16px -7px rgba(244, 197, 66, 0.9), inset 0 1px 1px rgba(255, 255, 255, 0.7);
+}
+
+.coin-mark::after {
+  content: '৳';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(80, 53, 0, 0.8);
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.wallet-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.wallet-label {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.wallet-balance {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 19px;
+  font-weight: 900;
+}
+
+.supporter-badge {
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(247, 201, 72, 0.4);
+  background: rgba(247, 201, 72, 0.14);
+  color: #ffd54a;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.store-card {
+  width: 100%;
+  max-width: 540px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 26px;
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02) 42%),
+    var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.store-card h2 {
+  margin: 4px 0 0;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
+.store-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.pack-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pack-option {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.pack-option:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.pack-option:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.pack-bonus {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  background: rgba(52, 211, 153, 0.13);
+  color: var(--green);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.pack-coins {
+  font-size: 25px;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.pack-unit {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.pack-price {
+  margin-top: 8px;
+  color: #ffd54a;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.pack-label { color: var(--muted); font-size: 10px; font-weight: 600; }
+
+.store-status {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.45;
+}
+
+/* ---------- Payment result ---------- */
+.payment-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.payment-card {
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+  align-items: center;
+}
+
+.payment-card h1 {
+  margin: 8px 0 4px;
+  font-size: 27px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
+.payment-card p { margin: 0; font-size: 13px; line-height: 1.6; }
+.payment-card .btn { width: 100%; margin-top: 10px; }
+.payment-card .spinner { margin: 8px auto; }
+.payment-card .tiny { font-size: 10px; opacity: 0.65; word-break: break-all; }
+
+.pay-icon {
+  width: 66px;
+  height: 66px;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  background: rgba(124, 92, 255, 0.16);
+  border: 1px solid rgba(124, 92, 255, 0.3);
+  color: #cfc4ff;
+  font-size: 30px;
+  font-weight: 900;
+  box-shadow: 0 18px 40px -18px rgba(124, 92, 255, 0.8);
+}
+
+.pay-icon.success { background: rgba(52, 211, 153, 0.14); border-color: rgba(52, 211, 153, 0.35); color: var(--green); }
+.pay-icon.error { background: rgba(239, 83, 80, 0.14); border-color: rgba(239, 83, 80, 0.35); color: var(--red); }
+
 /* ---------- Overlays ---------- */
 .queue-overlay {
   position: fixed;
@@ -908,6 +1131,13 @@ canvas {
   .seats { grid-template-columns: 1fr; }
   .code { font-size: 30px; }
   .game-layout { gap: 10px; }
+  .wallet-strip { padding: 10px 12px; border-radius: 16px; }
+  .store-card { padding: 20px; border-radius: 22px; }
+  .store-card h2 { font-size: 21px; }
+  .pack-list { gap: 8px; }
+  .pack-option { padding: 12px; }
+  .pack-coins { font-size: 22px; }
+  .payment-card { padding: 24px 20px; }
   .game-head { padding: 8px 10px; border-radius: 16px; }
   .team-chip { padding: 6px 10px; font-size: 11px; }
   .chip-name { max-width: 74px; }

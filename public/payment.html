@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#070b16" />
+  <title>Payment status — Ludo</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="payment-page">
+  <main class="card payment-card">
+    <div id="payIcon" class="pay-icon">৳</div>
+    <h1 id="payTitle">Checking payment…</h1>
+    <p id="payMsg" class="muted">Please wait while we confirm your transaction.</p>
+    <p id="payOrder" class="muted tiny"></p>
+    <div id="paySpinner" class="spinner"></div>
+    <a id="payBack" class="btn primary hidden" href="/">Back to game</a>
+  </main>
+
+  <script>
+    (() => {
+      const params = new URLSearchParams(location.search);
+      const order = params.get('order');
+      const cancelled = params.get('cancelled');
+      const icon = document.getElementById('payIcon');
+      const title = document.getElementById('payTitle');
+      const message = document.getElementById('payMsg');
+      const orderText = document.getElementById('payOrder');
+      const spinner = document.getElementById('paySpinner');
+      const back = document.getElementById('payBack');
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      if (order) orderText.textContent = `Order: ${order}`;
+
+      function finish(type, heading, text) {
+        icon.className = `pay-icon ${type}`;
+        icon.textContent = type === 'success' ? '✓' : type === 'error' ? '!' : '৳';
+        title.textContent = heading;
+        message.textContent = text;
+        spinner.classList.add('hidden');
+        back.classList.remove('hidden');
+      }
+
+      if (!order) {
+        finish('error', 'Missing order', 'Start a new checkout from the coin store.');
+        return;
+      }
+
+      if (cancelled) {
+        finish('error', 'Payment cancelled', 'No coins were added. You can try again anytime.');
+        return;
+      }
+
+      async function poll() {
+        for (let attempt = 0; attempt < 24; attempt += 1) {
+          try {
+            const response = await fetch(`/api/payments/status?order=${encodeURIComponent(order)}`, { cache: 'no-store' });
+            const data = await response.json().catch(() => ({}));
+            if (data.status === 'paid') {
+              finish('success', 'Payment complete', `${Number(data.coins || 0).toLocaleString('en-US')} coins added to your wallet.`);
+              return;
+            }
+            if (data.status === 'failed') {
+              finish('error', 'Payment failed', 'No coins were added. Please try again.');
+              return;
+            }
+          } catch {
+          }
+          await sleep(2500);
+        }
+        finish('error', 'Still pending', 'If money was deducted, reopen this page in a minute or contact support with your order ID.');
+      }
+
+      poll();
+    })();
+  </script>
+</body>
+</html>

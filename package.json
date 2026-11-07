@@ -1,6 +1,6 @@
 {
   "name": "ludo-teams",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "description": "Online 4-player Ludo with 2v2 team pairing",
   "main": "server.js",
@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node test/game.test.js",
+    "test": "node test/game.test.js && node test/payments.test.js",
+    "test:payments": "node test/payments.test.js",
     "test:integration": "node test/integration.test.js"
   },
   "dependencies": {

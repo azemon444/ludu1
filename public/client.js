@@ -94,6 +94,13 @@ const els = {
   quickSub: document.getElementById('quickSub'),
   create: document.getElementById('createBtn'),
   join: document.getElementById('joinBtn'),
+  coinBalance: document.getElementById('coinBalance'),
+  supporterBadge: document.getElementById('supporterBadge'),
+  storeBtn: document.getElementById('storeBtn'),
+  storeModal: document.getElementById('storeModal'),
+  closeStore: document.getElementById('closeStoreBtn'),
+  packList: document.getElementById('packList'),
+  storeStatus: document.getElementById('storeStatus'),
   homeSizePicker: document.getElementById('homeSizePicker'),
   waitSizePicker: document.getElementById('waitSizePicker'),
   sizeHint: document.getElementById('sizeHint'),
@@ -153,6 +160,11 @@ let pulseOn = false;
 let pulseTimer = null;
 let animations = [];
 let animFrame = null;
+let wallet = { coins: 0, supporter: false };
+let storePacks = [];
+let storeConfigured = false;
+let storeLoading = false;
+let storeReturnFocus = null;
 
 function esc(value) {
   return String(value).replace(/[&<>"']/g, (ch) => ({
@@ -278,6 +290,100 @@ function desiredName() {
   return name;
 }
 
+function renderWallet() {
+  els.coinBalance.textContent = Number(wallet.coins || 0).toLocaleString('en-US');
+  els.supporterBadge.classList.toggle('hidden', !wallet.supporter);
+}
+
+async function loadWallet() {
+  try {
+    const response = await fetch(`/api/wallet/${encodeURIComponent(myId)}`, { cache: 'no-store' });
+    if (!response.ok) return;
+    wallet = await response.json();
+    renderWallet();
+  } catch {
+  }
+}
+
+function closeStore() {
+  els.storeModal.classList.add('hidden');
+  if (storeReturnFocus && typeof storeReturnFocus.focus === 'function') {
+    storeReturnFocus.focus();
+  }
+  storeReturnFocus = null;
+}
+
+async function loadStore() {
+  if (storeLoading) return;
+  storeLoading = true;
+  els.storeStatus.textContent = 'Loading coin packs…';
+  try {
+    const response = await fetch('/api/store', { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not load the store');
+    storePacks = Array.isArray(data.packs) ? data.packs : [];
+    storeConfigured = !!data.configured;
+    renderStorePacks();
+    els.storeStatus.textContent = storeConfigured
+      ? ''
+      : 'Payments are not configured yet. Add the ZiniPay API key to enable checkout.';
+  } catch (error) {
+    els.storeStatus.textContent = error.message;
+  } finally {
+    storeLoading = false;
+  }
+}
+
+function renderStorePacks() {
+  els.packList.innerHTML = storePacks.map((pack) => `
+    <button class="pack-option" data-pack="${esc(pack.id)}" ${storeConfigured ? '' : 'disabled'}>
+      ${pack.bonus ? `<span class="pack-bonus">${esc(pack.bonus)}</span>` : ''}
+      <span class="pack-coins">${Number(pack.coins).toLocaleString('en-US')}</span>
+      <span class="pack-unit">coins</span>
+      <span class="pack-price">৳${Number(pack.amount).toLocaleString('en-US')}</span>
+      <span class="pack-label">${esc(pack.label)}</span>
+    </button>
+  `).join('');
+}
+
+async function buyPack(packId) {
+  const pack = storePacks.find((item) => item.id === packId);
+  if (!pack || !storeConfigured) return;
+
+  const name = (els.name.value || '').trim() || localStorage.getItem(NAME_KEY) || 'Player';
+  els.storeStatus.textContent = 'Creating secure payment…';
+  for (const button of els.packList.querySelectorAll('button')) button.disabled = true;
+
+  try {
+    const response = await fetch('/api/payments/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerId: myId, name, packId: pack.id }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.paymentUrl) {
+      throw new Error(data.error || 'Could not start payment');
+    }
+    window.location.assign(data.paymentUrl);
+  } catch (error) {
+    els.storeStatus.textContent = error.message;
+    for (const button of els.packList.querySelectorAll('button')) {
+      button.disabled = !storeConfigured;
+    }
+  }
+}
+
+function openStore() {
+  storeReturnFocus = document.activeElement;
+  els.storeModal.classList.remove('hidden');
+  els.storeStatus.textContent = storePacks.length && !storeConfigured
+    ? 'Payments are not configured yet. Add the ZiniPay API key to enable checkout.'
+    : '';
+  if (!storePacks.length) loadStore();
+  els.closeStore.focus();
+}
+
+
 function chooseSize(size) {
   selectedSize = normalizeSize(size);
   localStorage.setItem(SIZE_KEY, String(selectedSize));
@@ -311,6 +417,21 @@ els.waitSizePicker.addEventListener('click', (event) => {
   chooseSize(btn.dataset.size);
   socket.emit('setSize', { size: selectedSize });
 });
+
+els.storeBtn.addEventListener('click', openStore);
+els.closeStore.addEventListener('click', closeStore);
+els.storeModal.addEventListener('click', (event) => {
+  if (event.target === els.storeModal) closeStore();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !els.storeModal.classList.contains('hidden')) closeStore();
+});
+els.packList.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-pack]');
+  if (!button || button.disabled) return;
+  buyPack(button.dataset.pack);
+});
+window.addEventListener('focus', loadWallet);
 
 els.quick.addEventListener('click', () => {
   const name = desiredName();
@@ -1144,5 +1265,6 @@ els.code.addEventListener('keydown', (event) => {
 els.name.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') els.create.click();
 });
-
 render();
+renderWallet();
+loadWallet();

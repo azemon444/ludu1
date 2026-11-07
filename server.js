@@ -3,15 +3,25 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const crypto = require('node:crypto');
 const { Server } = require('socket.io');
 const gameLogic = require('./game');
+const store = require('./store');
+const zinipay = require('./zinipay');
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 const rooms = new Map();
 const quickQueues = { 2: [], 3: [], 4: [] };
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 const app = express();
+app.set('trust proxy', 1);
+app.use(express.json({
+  limit: '16kb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString('utf8');
+  },
+}));
 const server = http.createServer(app);
 const io = new Server(server);
 
@@ -21,11 +31,158 @@ app.get('/health', (req, res) => {
     version: APP_VERSION,
     rooms: rooms.size,
     queue: Object.values(quickQueues).reduce((total, queue) => total + queue.length, 0),
+    payments: zinipay.configured(),
     uptime: Math.round(process.uptime()),
   });
 });
 
+app.get('/api/store', (req, res) => {
+  res.json({
+    currency: 'BDT',
+    configured: zinipay.configured(),
+    nonRedeemable: true,
+    packs: store.publicPacks(),
+  });
+});
+
+app.get('/api/wallet/:playerId', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(store.getWallet(req.params.playerId));
+});
+
+app.post('/api/payments/checkout', async (req, res) => {
+  if (!zinipay.configured()) {
+    return res.status(503).json({ error: 'Payments are not configured yet' });
+  }
+
+  const playerId = String(req.body?.playerId || '').slice(0, 64);
+  const pack = store.getPack(req.body?.packId);
+  if (!playerId || !pack) {
+    return res.status(400).json({ error: 'Invalid checkout' });
+  }
+
+  const order = store.createOrder({
+    playerId,
+    name: cleanName(req.body?.name),
+    packId: pack.id,
+  });
+  if (!order) return res.status(400).json({ error: 'Invalid checkout' });
+
+  const base = publicBaseUrl(req);
+  try {
+    const invoice = await zinipay.createInvoice({
+      amount: pack.amount,
+      name: order.name,
+      metadata: {
+        order_id: order.orderId,
+        player_id: order.playerId,
+        pack_id: order.packId,
+      },
+      redirectUrl: `${base}/payment.html?order=${encodeURIComponent(order.orderId)}`,
+      cancelUrl: `${base}/payment.html?order=${encodeURIComponent(order.orderId)}&cancelled=1`,
+      webhookUrl: `${base}/api/zinipay/webhook`,
+    });
+    store.attachInvoice(order.orderId, invoice);
+    return res.json({
+      orderId: order.orderId,
+      paymentUrl: invoice.paymentUrl,
+    });
+  } catch (error) {
+    console.error(`ZiniPay create failed: ${error.message}`);
+    store.markFailed(order.orderId, error.message);
+    return res.status(502).json({ error: 'Could not start payment' });
+  }
+});
+
+app.get('/api/payments/status', async (req, res) => {
+  const order = store.getOrder(req.query.order);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.status === 'paid' || order.status === 'failed' || !order.invoiceId) {
+    return res.json(paymentStatus(order));
+  }
+
+  try {
+    const settled = await settleInvoice(order.invoiceId);
+    return res.json(paymentStatus(settled.order || order));
+  } catch (error) {
+    console.error(`ZiniPay verify failed: ${error.message}`);
+    return res.status(502).json({ error: 'Could not verify payment' });
+  }
+});
+
+app.post('/api/zinipay/webhook', async (req, res) => {
+  const secret = process.env.ZINIPAY_WEBHOOK_SECRET;
+  const signature = req.get('x-zinipay-signature');
+  if (secret && signature) {
+    const expected = crypto.createHmac('sha256', secret).update(req.rawBody || '').digest('hex');
+    const left = Buffer.from(signature);
+    const right = Buffer.from(expected);
+    if (left.length !== right.length || !crypto.timingSafeEqual(left, right)) {
+      return res.status(401).json({ ok: false });
+    }
+  }
+
+  const invoiceId = String(
+    req.body?.invoice_id
+    || req.body?.invoiceId
+    || req.query?.invoice_id
+    || '',
+  );
+  if (!invoiceId) return res.json({ ok: true, ignored: true });
+
+  try {
+    const settled = await settleInvoice(invoiceId);
+    return res.json({ ok: true, status: settled.status });
+  } catch (error) {
+    console.error(`ZiniPay webhook failed: ${error.message}`);
+    return res.status(500).json({ ok: false });
+  }
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
+
+function publicBaseUrl(req) {
+  const configured = process.env.PUBLIC_BASE_URL;
+  if (configured) return configured.replace(/\/+$/, '');
+  return `${req.protocol}://${req.get('host')}`;
+}
+
+function paymentStatus(order) {
+  return {
+    orderId: order.orderId,
+    status: order.status,
+    packId: order.packId,
+    coins: order.coins,
+    amount: order.amount,
+  };
+}
+
+async function settleInvoice(invoiceId) {
+  const order = store.getOrderByInvoice(invoiceId);
+  if (!order) return { status: 'ignored', order: null };
+  if (order.status === 'paid') return { status: 'paid', order };
+
+  const result = await zinipay.verifyInvoice(invoiceId);
+  if (result.status === 'COMPLETED') {
+    if (!Number.isFinite(result.amount) || Math.round(result.amount) !== order.amount) {
+      const failed = store.markFailed(order.orderId, 'Amount mismatch');
+      return { status: 'failed', order: failed, reason: 'amount_mismatch' };
+    }
+    const paid = store.markPaid(order.orderId, {
+      transactionId: result.transactionId,
+      method: result.method,
+    });
+    return { status: 'paid', order: paid.order || order };
+  }
+
+  if (result.status === 'FAILED') {
+    const failed = store.markFailed(order.orderId, 'Provider reported failure');
+    return { status: 'failed', order: failed };
+  }
+
+  return { status: 'pending', order };
+}
+
 
 function makeCode() {
   let code;

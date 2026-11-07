@@ -48,6 +48,18 @@
         </div>
       </div>
 
+      <div class="wallet-strip">
+        <span class="coin-mark" aria-hidden="true"></span>
+        <div class="wallet-copy">
+          <span class="wallet-label">Your coins</span>
+          <span class="wallet-balance">
+            <b id="coinBalance">0</b>
+            <span id="supporterBadge" class="supporter-badge hidden">Supporter</span>
+          </span>
+        </div>
+        <button id="storeBtn" class="btn ghost small">Get coins</button>
+      </div>
+
       <p class="hint">
         <b class="t-red">Red</b> + <b class="t-yellow">Yellow</b>
         <span class="vs">vs</span>
@@ -136,6 +148,21 @@
         </aside>
       </div>
     </section>
+  </div>
+
+  <div id="storeModal" class="queue-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="storeTitle">
+    <div class="store-card">
+      <div class="row-between">
+        <div>
+          <div class="muted small-label">Non-redeemable</div>
+          <h2 id="storeTitle">Coin store</h2>
+        </div>
+        <button id="closeStoreBtn" class="btn ghost small">Close</button>
+      </div>
+      <p class="store-note">Coins are supporter credits for cosmetics and events. They have no cash value and cannot be withdrawn.</p>
+      <div id="packList" class="pack-list"></div>
+      <div id="storeStatus" class="store-status" role="status"></div>
+    </div>
   </div>
 
   <div id="queueOverlay" class="queue-overlay hidden">
